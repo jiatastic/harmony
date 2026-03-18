@@ -128,6 +128,15 @@ interface DidFailLoadEvent extends Event {
 interface BrowserWebviewElement extends HTMLElement {
   src: string
   loadURL?: (url: string) => void
+  reload?: () => void
+}
+
+function describeWebviewError(event: DidFailLoadEvent): string {
+  if (event.errorDescription === 'ERR_BLOCKED_BY_RESPONSE') {
+    return 'This site blocks being embedded in Harmony. Use Open to view it in your default browser.'
+  }
+
+  return event.errorDescription || `Failed to load ${event.validatedURL}`
 }
 
 function BrowserPane({ tab, visible, onDraftChange, onNavigate }: BrowserPaneProps): React.JSX.Element {
@@ -148,20 +157,27 @@ function BrowserPane({ tab, visible, onDraftChange, onNavigate }: BrowserPanePro
       setIsLoading(false)
     }
 
+    const handleDomReady = (): void => {
+      setIsLoading(false)
+      setLoadError(null)
+    }
+
     const handleFail = (event: Event): void => {
       const e = event as DidFailLoadEvent
       if (e.errorCode === -3) return
       setIsLoading(false)
-      setLoadError(e.errorDescription || `Failed to load ${e.validatedURL}`)
+      setLoadError(describeWebviewError(e))
     }
 
     el.addEventListener('did-start-loading', handleStart)
     el.addEventListener('did-stop-loading', handleStop)
+    el.addEventListener('dom-ready', handleDomReady)
     el.addEventListener('did-fail-load', handleFail)
 
     return () => {
       el.removeEventListener('did-start-loading', handleStart)
       el.removeEventListener('did-stop-loading', handleStop)
+      el.removeEventListener('dom-ready', handleDomReady)
       el.removeEventListener('did-fail-load', handleFail)
     }
   }, [])
@@ -171,12 +187,24 @@ function BrowserPane({ tab, visible, onDraftChange, onNavigate }: BrowserPanePro
     setLoadError(null)
     const el = webviewRef.current
     if (!el) return
-    if (typeof el.loadURL === 'function') {
-      el.loadURL(tab.url)
-      return
-    }
     el.src = tab.url
   }, [tab.url])
+
+  useEffect(() => {
+    if (!visible) return
+    const el = webviewRef.current
+    if (!el) return
+
+    // Webviews can stay black after being hidden or first attached in a tabbed layout.
+    // Re-assert the current URL when the pane becomes visible so Chromium repaints it.
+    window.requestAnimationFrame(() => {
+      if (el.src !== tab.url) {
+        el.src = tab.url
+      } else if (typeof el.reload === 'function') {
+        el.reload()
+      }
+    })
+  }, [tab.url, visible])
 
   return (
     <div className="browser-pane" style={{ display: visible ? 'flex' : 'none' }}>
@@ -211,12 +239,28 @@ function BrowserPane({ tab, visible, onDraftChange, onNavigate }: BrowserPanePro
       <div className="browser-status" role="status" aria-live="polite">
         {loadError ? `Load failed: ${loadError}` : isLoading ? 'Loading...' : `Viewing ${tab.url}`}
       </div>
-      <webview
-        ref={webviewRef}
-        className="browser-webview"
-        src={tab.url}
-        allowpopups={true}
-      />
+      <div className="browser-webview-shell">
+        {loadError && (
+          <div className="browser-error-overlay" role="alert">
+            <p>{loadError}</p>
+            <button
+              className="browser-open-btn"
+              type="button"
+              onClick={() => {
+                void window.api.openExternalUrl(tab.url)
+              }}
+            >
+              Open in Browser
+            </button>
+          </div>
+        )}
+        <webview
+          ref={webviewRef}
+          className="browser-webview"
+          src={tab.url}
+          allowpopups={true}
+        />
+      </div>
     </div>
   )
 }
@@ -296,6 +340,13 @@ function TerminalHost({
   const didStartAgentRef = useRef(false)
   const onSessionChangeRef = useRef(onSessionChange)
 
+  const focusTerminal = useCallback((): void => {
+    // Defer focus slightly so it wins over the launcher button/tab that was just clicked.
+    window.requestAnimationFrame(() => {
+      xtermRef.current?.focus()
+    })
+  }, [])
+
   useEffect(() => {
     onSessionChangeRef.current = onSessionChange
   }, [onSessionChange])
@@ -309,6 +360,8 @@ function TerminalHost({
       allowTransparency: true,
       convertEol: true,
       cursorBlink: true,
+      cursorStyle: 'block',
+      cursorInactiveStyle: 'outline',
       fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
       fontSize: 13,
       fontWeight: '500',
@@ -323,8 +376,13 @@ function TerminalHost({
     term.loadAddon(new WebLinksAddon())
     term.open(host)
     fit.fit()
-    term.focus()
     xtermRef.current = term
+    focusTerminal()
+
+    const handlePointerDown = (): void => {
+      focusTerminal()
+    }
+    host.addEventListener('pointerdown', handlePointerDown)
 
     const ro = new ResizeObserver(() => {
       fit.fit()
@@ -356,7 +414,10 @@ function TerminalHost({
     })
 
     void window.api
-      .createTerminal({ cwd: workspacePath })
+      .createTerminal({
+        cwd: workspacePath,
+        themeHint: isDarkMode() ? 'dark' : 'light'
+      })
       .then((session) => {
         if (cancelled) {
           window.api.destroyTerminal(session.sessionId)
@@ -366,6 +427,7 @@ function TerminalHost({
         onSessionChangeRef.current?.(session.sessionId)
         fit.fit()
         window.api.resizeTerminal(session.sessionId, term.cols, term.rows)
+        focusTerminal()
         if (agent?.command && !didStartAgentRef.current) {
           didStartAgentRef.current = true
           void window.api
@@ -378,6 +440,9 @@ function TerminalHost({
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Agent failed to start'
               term.writeln(`\r\n[agent error] ${msg}`)
+            })
+            .finally(() => {
+              focusTerminal()
             })
         }
       })
@@ -404,6 +469,7 @@ function TerminalHost({
       offExit()
       inputOff.dispose()
       resizeOff.dispose()
+      host.removeEventListener('pointerdown', handlePointerDown)
       const s = sessionRef.current
       if (s) window.api.destroyTerminal(s.sessionId)
       onSessionChangeRef.current?.(null)
@@ -417,9 +483,9 @@ function TerminalHost({
   useEffect(() => {
     if (visible) {
       fitRef.current?.fit()
-      xtermRef.current?.focus()
+      focusTerminal()
     }
-  }, [visible])
+  }, [focusTerminal, visible])
 
   return (
     <div ref={hostRef} className="terminal-host" style={{ display: visible ? 'flex' : 'none' }} />
@@ -552,6 +618,16 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
     )
   }, [])
 
+  if (tabs.length === 0) {
+    return (
+      <div className="terminal-wrapper">
+        <div className="terminal-empty">
+          <p>No terminal. Select a workspace to start.</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="terminal-wrapper">
       <div className="terminal-tabs">
@@ -655,11 +731,6 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
         ))}
       </div>
 
-      {tabs.length === 0 && (
-        <div className="terminal-empty">
-          <p>No terminal. Select a workspace to start.</p>
-        </div>
-      )}
     </div>
   )
 }

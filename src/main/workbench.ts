@@ -111,19 +111,58 @@ async function listOpenCodeSubagents(): Promise<
   return subagents.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-async function listMcpServers(): Promise<Array<{ id: string; transport: string }>> {
+function toOriginFavicon(url: string | undefined): string | undefined {
+  if (!url) return undefined
+  try {
+    return new URL('/favicon.ico', url).toString()
+  } catch {
+    return undefined
+  }
+}
+
+function inferMcpServerIcon(
+  id: string,
+  value: { type?: string; url?: string; command?: string; args?: string[] }
+): string | undefined {
+  const haystack = [id, value.url, value.command, ...(value.args ?? [])]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  const knownIcons: Array<[string[], string]> = [
+    [['firecrawl'], 'https://firecrawl.dev/favicon.ico'],
+    [['supabase', 'server-postgres'], 'https://supabase.com/favicon.ico'],
+    [['linear'], 'https://linear.app/favicon.ico'],
+    [['context7'], 'https://context7.com/favicon.ico'],
+    [['posthog'], 'https://posthog.com/favicon.ico'],
+    [['helicone'], 'https://helicone.ai/favicon.ico'],
+    [['logfire', 'pydantic'], 'https://logfire.pydantic.dev/favicon.ico'],
+    [['ai-sdk', 'vercel'], 'https://sdk.vercel.ai/favicon.ico']
+  ]
+
+  for (const [needles, iconUrl] of knownIcons) {
+    if (needles.some((needle) => haystack.includes(needle))) {
+      return iconUrl
+    }
+  }
+
+  return toOriginFavicon(value.url)
+}
+
+async function listMcpServers(): Promise<Array<{ id: string; transport: string; iconUrl?: string }>> {
   const configPath = join(homedir(), '.cursor/mcp.json')
   const raw = await fs.readFile(configPath, 'utf8').catch(() => '')
   if (!raw) return []
 
   try {
     const parsed = JSON.parse(raw) as {
-      mcpServers?: Record<string, { type?: string; url?: string; command?: string }>
+      mcpServers?: Record<string, { type?: string; url?: string; command?: string; args?: string[] }>
     }
     return Object.entries(parsed.mcpServers ?? {})
       .map(([id, value]) => ({
         id,
-        transport: value.type ?? (value.url ? 'http' : value.command ? 'stdio' : 'unknown')
+        transport: value.type ?? (value.url ? 'http' : value.command ? 'stdio' : 'unknown'),
+        iconUrl: inferMcpServerIcon(id, value)
       }))
       .sort((a, b) => a.id.localeCompare(b.id))
   } catch {

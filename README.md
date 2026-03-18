@@ -46,6 +46,12 @@ npm run typecheck
 npm run build:mac
 ```
 
+For local smoke tests without Apple signing credentials:
+
+```bash
+npm run build:mac:unsigned
+```
+
 ### Build for Windows
 
 ```bash
@@ -68,5 +74,14 @@ Packaged artifacts are written to `dist/`.
 
 ## Notes
 
-- Local macOS builds in this repo are currently unsigned.
-- On first launch, macOS may ask you to confirm that you want to open the app.
+- Public macOS downloads should be built with a valid `Developer ID Application`
+  certificate so `electron-builder` can code-sign the app.
+- `npm run build:mac` will notarize the macOS app when one of these credential
+  sets is present:
+  - `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
+  - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
+- Use `npm run build:mac:unsigned` only for local testing. Unsigned builds are
+  expected to trigger macOS security warnings when shared with other users.
+- If local signing fails with `com.apple.provenance`, rebuild in a clean CI
+  environment or reinstall `electron` from a non-quarantined source before
+  creating the release artifact.

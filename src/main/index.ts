@@ -35,7 +35,7 @@ function createWindow(): void {
       return
     }
 
-    webPreferences.preload = ''
+    delete webPreferences.preload
     webPreferences.nodeIntegration = false
     webPreferences.contextIsolation = true
   })

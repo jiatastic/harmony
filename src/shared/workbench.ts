@@ -153,6 +153,7 @@ export interface SkillSummary {
 export interface McpServerSummary {
   id: string
   transport: string
+  iconUrl?: string
 }
 
 export interface SubagentSummary {
@@ -220,6 +221,7 @@ export interface GitActionResult {
 
 export interface CreateTerminalPayload {
   cwd: string
+  themeHint?: 'light' | 'dark'
 }
 
 export interface TerminalSession {

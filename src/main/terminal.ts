@@ -78,6 +78,7 @@ async function createTerminalSession(
   payload: CreateTerminalPayload
 ): Promise<TerminalSession> {
   const cwd = resolve(payload.cwd)
+  const colorFgBg = payload.themeHint === 'light' ? '0;15' : '15;0'
 
   if (!payload.cwd?.trim()) {
     throw new Error('A worktree path is required to create a terminal.')
@@ -92,7 +93,9 @@ async function createTerminalSession(
     cwd,
     env: {
       ...process.env,
-      TERM: 'xterm-256color'
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      COLORFGBG: colorFgBg
     }
   })
 

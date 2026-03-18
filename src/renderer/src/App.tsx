@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { flushSync } from 'react-dom'
 import { FileTree } from './components/FileTree'
 import { TerminalPanel } from './components/TerminalPanel'
 import { WorktreePanel, type WorkspaceItem } from './components/WorktreePanel'
@@ -14,6 +15,11 @@ import type {
 } from '../../shared/workbench'
 
 type Theme = 'light' | 'dark' | 'system'
+type DocumentWithThemeTransition = Document & {
+  startViewTransition?: (update: () => void) => {
+    ready: Promise<void>
+  }
+}
 
 function getSystemTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -433,6 +439,10 @@ function leafPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? p
 }
 
+function prefersReducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 
 const SOURCE_COLORS: Record<string, string> = {
   cursor:  '#111111',
@@ -458,6 +468,20 @@ function sourceColor(src: string): string {
 
 function sourceLabel(src: string): string {
   return SOURCE_LABELS[src.toLowerCase()] ?? src.charAt(0).toUpperCase() + src.slice(1)
+}
+
+function AccordItemGlyph({
+  iconUrl,
+  color
+}: {
+  iconUrl?: string
+  color?: string
+}): JSX.Element {
+  if (iconUrl) {
+    return <img className="accord-item-icon" src={iconUrl} alt="" aria-hidden="true" loading="lazy" />
+  }
+
+  return <span className="accord-item-dot" style={color ? { background: color } : undefined} aria-hidden="true" />
 }
 
 
@@ -990,6 +1014,45 @@ function App(): React.JSX.Element {
     })
   }, [])
 
+  const handleThemeToggle = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+    const next = THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length]
+    const doc = document as DocumentWithThemeTransition
+
+    if (!doc.startViewTransition || prefersReducedMotion()) {
+      setTheme(next)
+      return
+    }
+
+    const x = event.clientX
+    const y = event.clientY
+    const maxRadius = Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y)
+    )
+
+    const transition = doc.startViewTransition(() => {
+      flushSync(() => {
+        setTheme(next)
+      })
+    })
+
+    void transition.ready.then(() => {
+      document.documentElement.animate(
+        {
+          clipPath: [
+            `circle(0px at ${x}px ${y}px)`,
+            `circle(${maxRadius}px at ${x}px ${y}px)`
+          ]
+        },
+        {
+          duration: 520,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+          pseudoElement: '::view-transition-new(root)'
+        } as KeyframeAnimationOptions
+      )
+    })
+  }, [theme, setTheme])
+
   return (
     <div className="shell">
       {/* aria-live region for async status announcements */}
@@ -1013,20 +1076,19 @@ function App(): React.JSX.Element {
             type="button"
             aria-label={`Theme: ${THEME_LABELS[theme]}. Click to switch.`}
             title={THEME_LABELS[theme]}
-            onClick={() => {
-              const next = THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length]
-              setTheme(next)
-            }}
+            onClick={handleThemeToggle}
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              {theme === 'dark' ? (
-                <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.2 3.1A4.5 4.5 0 0 1 12.9 9.8 6.5 6.5 0 0 1 6.2 3.1Z" fill="currentColor"/>
-              ) : theme === 'light' ? (
-                <path d="M8 3.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9ZM8 2a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-1 0v1A.5.5 0 0 0 8 2Zm0 12a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 1 0v-1A.5.5 0 0 0 8 14ZM2 8a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0 0 1h1A.5.5 0 0 0 2 8Zm12 0a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 0-1h-1A.5.5 0 0 0 14 8ZM3.8 3.8a.5.5 0 0 0-.7-.7l-.7.7a.5.5 0 0 0 .7.7l.7-.7Zm8.4 8.4a.5.5 0 0 0 .7.7l.7-.7a.5.5 0 0 0-.7-.7l-.7.7ZM3.8 12.2a.5.5 0 0 0-.7.7l.7.7a.5.5 0 0 0 .7-.7l-.7-.7Zm8.4-8.4a.5.5 0 0 0 .7-.7l-.7-.7a.5.5 0 0 0-.7.7l.7.7Z" fill="currentColor"/>
-              ) : (
-                <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM3.5 8a4.5 4.5 0 0 1 4.5-4.5v9A4.5 4.5 0 0 1 3.5 8Z" fill="currentColor"/>
-              )}
-            </svg>
+            <span key={theme} className="titlebar-btn-icon">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                {theme === 'dark' ? (
+                  <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.2 3.1A4.5 4.5 0 0 1 12.9 9.8 6.5 6.5 0 0 1 6.2 3.1Z" fill="currentColor"/>
+                ) : theme === 'light' ? (
+                  <path d="M8 3.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9ZM8 2a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-1 0v1A.5.5 0 0 0 8 2Zm0 12a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 1 0v-1A.5.5 0 0 0 8 14ZM2 8a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0 0 1h1A.5.5 0 0 0 2 8Zm12 0a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 0-1h-1A.5.5 0 0 0 14 8ZM3.8 3.8a.5.5 0 0 0-.7-.7l-.7.7a.5.5 0 0 0 .7.7l.7-.7Zm8.4 8.4a.5.5 0 0 0 .7.7l.7-.7a.5.5 0 0 0-.7-.7l-.7.7ZM3.8 12.2a.5.5 0 0 0-.7.7l.7.7a.5.5 0 0 0 .7-.7l-.7-.7Zm8.4-8.4a.5.5 0 0 0 .7-.7l-.7-.7a.5.5 0 0 0-.7.7l.7.7Z" fill="currentColor"/>
+                ) : (
+                  <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM3.5 8a4.5 4.5 0 0 1 4.5-4.5v9A4.5 4.5 0 0 1 3.5 8Z" fill="currentColor"/>
+                )}
+              </svg>
+            </span>
           </button>
         </div>
       </header>
@@ -1409,7 +1471,7 @@ function App(): React.JSX.Element {
                     ) : (
                       contextInfo!.mcpServers.map((server) => (
                         <div key={server.id} className="accord-item">
-                          <span className="accord-item-dot" aria-hidden="true" />
+                          <AccordItemGlyph iconUrl={server.iconUrl} />
                           <span className="accord-item-name">{server.id}</span>
                           <span className="accord-item-chip">{server.transport}</span>
                         </div>

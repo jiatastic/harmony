@@ -1,5 +1,7 @@
 appId: com.jiatastic.harmony
 productName: Harmony
+afterPack: scripts/prepare-mac-build.cjs
+afterSign: scripts/notarize.cjs
 directories:
   buildResources: build
 files:
@@ -22,14 +24,15 @@ mac:
   target:
     - dmg
     - zip
-  identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
 linux:
