@@ -1,34 +1,72 @@
-# harmony
+# Harmony
 
-An Electron application with React and TypeScript
+Harmony is a desktop workspace for managing Git worktrees, local terminals, and AI coding agents in one place.
 
-## Recommended IDE Setup
+## What It Does
 
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
+- Open multiple repositories and folders side by side
+- Create and manage Git worktrees from the app
+- View file trees and workspace changes
+- Run local terminal sessions inside each workspace
+- Track agent context, skills, MCP servers, and token usage
+- Generate commit messages and handle common source control actions
 
-## Project Setup
+## Tech Stack
 
-### Install
+- Electron
+- React
+- TypeScript
+- electron-vite
+
+## Getting Started
+
+### Install dependencies
 
 ```bash
-$ npm install
+npm install
 ```
 
-### Development
+### Start development
 
 ```bash
-$ npm run dev
+npm run dev
 ```
 
-### Build
+### Type-check
 
 ```bash
-# For windows
-$ npm run build:win
-
-# For macOS
-$ npm run build:mac
-
-# For Linux
-$ npm run build:linux
+npm run typecheck
 ```
+
+## Build
+
+### Build for macOS
+
+```bash
+npm run build:mac
+```
+
+### Build for Windows
+
+```bash
+npm run build:win
+```
+
+### Build for Linux
+
+```bash
+npm run build:linux
+```
+
+Packaged artifacts are written to `dist/`.
+
+## Release Artifacts
+
+- macOS: `Harmony-<version>-<arch>.dmg` and `Harmony-<version>-<arch>-mac.zip`
+- Windows: `Harmony-<version>-<arch>-setup.exe`
+- Linux: `Harmony-<version>-<arch>.AppImage` and distro-specific packages
+
+## Notes
+
+- Local macOS builds in this repo are currently unsigned.
+- On first launch, macOS may ask you to confirm that you want to open the app.

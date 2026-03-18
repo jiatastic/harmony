@@ -1,7 +1,8 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { disposeWorkbench, registerWorkbenchIpc } from './workbench'
 
 function createWindow(): void {
   // Create the browser window.
@@ -13,7 +14,8 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      webviewTag: true
     }
   })
 
@@ -24,6 +26,25 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    const target = params.src ?? ''
+    if (!/^https?:\/\//i.test(target)) {
+      event.preventDefault()
+      return
+    }
+
+    webPreferences.preload = ''
+    webPreferences.nodeIntegration = false
+    webPreferences.contextIsolation = true
+  })
+
+  mainWindow.webContents.on('did-attach-webview', (_event, contents) => {
+    contents.setWindowOpenHandler((details) => {
+      shell.openExternal(details.url)
+      return { action: 'deny' }
+    })
   })
 
   // HMR for renderer base on electron-vite cli.
@@ -49,8 +70,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
+  registerWorkbenchIpc()
 
   createWindow()
 
@@ -65,6 +85,8 @@ app.whenReady().then(() => {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
+  disposeWorkbench()
+
   if (process.platform !== 'darwin') {
     app.quit()
   }

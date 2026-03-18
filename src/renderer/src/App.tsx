@@ -1,34 +1,1487 @@
-import Versions from './components/Versions'
-import electronLogo from './assets/electron.svg'
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
+import { FileTree } from './components/FileTree'
+import { TerminalPanel } from './components/TerminalPanel'
+import { WorktreePanel, type WorkspaceItem } from './components/WorktreePanel'
+import type {
+  AgentUsage,
+  CodexQuota,
+  ContextInfo,
+  SessionStat,
+  WorkspaceChangesSnapshot,
+  WorkspaceEntry,
+  WorkspaceSnapshot,
+  WorktreeSummary
+} from '../../shared/workbench'
 
-function App(): React.JSX.Element {
-  const ipcHandle = (): void => window.electron.ipcRenderer.send('ping')
+type Theme = 'light' | 'dark' | 'system'
+
+function getSystemTheme(): 'light' | 'dark' {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function resolveTheme(theme: Theme): 'light' | 'dark' {
+  return theme === 'system' ? getSystemTheme() : theme
+}
+
+function applyTheme(theme: Theme): void {
+  document.documentElement.classList.toggle('dark', resolveTheme(theme) === 'dark')
+}
+
+function getInitialTheme(): Theme {
+  const stored = localStorage.getItem('harmony-theme') as Theme | null
+  return stored ?? 'system'
+}
+
+applyTheme(getInitialTheme())
+
+function useTheme(): [Theme, (t: Theme) => void] {
+  const [theme, setThemeState] = useState<Theme>(getInitialTheme)
+
+  useEffect(() => {
+    applyTheme(theme)
+    localStorage.setItem('harmony-theme', theme)
+  }, [theme])
+
+  useEffect(() => {
+    if (theme !== 'system') return
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = (): void => applyTheme('system')
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [theme])
+
+  return [theme, setThemeState]
+}
+
+
+function findFirstFile(entries: WorkspaceEntry[]): string | null {
+  for (const e of entries) {
+    if (e.kind === 'file') return e.path
+    if (e.children?.length) {
+      const f = findFirstFile(e.children)
+      if (f) return f
+    }
+  }
+  return null
+}
+
+function hasFile(entries: WorkspaceEntry[], p: string): boolean {
+  for (const e of entries) {
+    if (e.kind === 'file' && e.path === p) return true
+    if (e.children?.length && hasFile(e.children, p)) return true
+  }
+  return false
+}
+
+function countFiles(entries: WorkspaceEntry[]): number {
+  return entries.reduce((n, e) => n + (e.kind === 'file' ? 1 : countFiles(e.children ?? [])), 0)
+}
+
+
+function leafName(p: string | null): string {
+  if (!p) return 'harmony'
+  return p.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? p
+}
+
+const THEME_CYCLE: Theme[] = ['light', 'dark', 'system']
+const THEME_LABELS: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System' }
+const RIGHT_TABS = ['changes', 'files', 'inspector', 'usage'] as const
+type RightTab = (typeof RIGHT_TABS)[number]
+const RIGHT_TAB_LABELS: Record<RightTab, string> = {
+  changes: 'Changes',
+  files: 'Files',
+  inspector: 'Inspector',
+  usage: 'Usage'
+}
+
+const AGENT_LABELS: Record<AgentUsage['agent'], string> = {
+  codex: 'Codex',
+  claude: 'Claude',
+  opencode: 'OpenCode'
+}
+
+// Accent colors per agent (for the usage cards)
+const AGENT_COLORS: Record<AgentUsage['agent'], string> = {
+  codex: '#10a37f',   // OpenAI green
+  claude: '#d97757',  // Anthropic coral
+  opencode: '#7c6ff1' // OpenCode purple
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function fmtResetIn(unixSec: number): string {
+  const diffMs = unixSec * 1000 - Date.now()
+  if (diffMs <= 0) return 'now'
+  const h = Math.floor(diffMs / 3_600_000)
+  const m = Math.floor((diffMs % 3_600_000) / 60_000)
+  if (h >= 24) return `${Math.floor(h / 24)}d ${h % 24}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+function AgentUsageCard({ usage }: { usage: AgentUsage }): React.JSX.Element {
+  const color = AGENT_COLORS[usage.agent]
+  const total = usage.totalInputTokens + usage.totalOutputTokens
+  return (
+    <div className="usage-card">
+      <div className="usage-card-header">
+        <span className="usage-card-dot" style={{ background: color }} aria-hidden="true" />
+        <span className="usage-card-name">{AGENT_LABELS[usage.agent]}</span>
+        <span className="usage-card-sessions">{usage.sessionCount} sessions</span>
+      </div>
+
+      <div className="usage-token-rows">
+        <div className="usage-token-row">
+          <span className="usage-token-label">Input</span>
+          <span className="usage-token-value">{fmtTokens(usage.totalInputTokens)}</span>
+        </div>
+        <div className="usage-token-row">
+          <span className="usage-token-label">Output</span>
+          <span className="usage-token-value">{fmtTokens(usage.totalOutputTokens)}</span>
+        </div>
+        {usage.totalCacheTokens > 0 && (
+          <div className="usage-token-row">
+            <span className="usage-token-label">Cache</span>
+            <span className="usage-token-value usage-token-cache">{fmtTokens(usage.totalCacheTokens)}</span>
+          </div>
+        )}
+        <div className="usage-token-row usage-token-total">
+          <span className="usage-token-label">Total</span>
+          <span className="usage-token-value">{fmtTokens(total)}</span>
+        </div>
+        {usage.totalCostUSD != null && usage.totalCostUSD > 0 && (
+          <div className="usage-token-row">
+            <span className="usage-token-label">Cost</span>
+            <span className="usage-token-value usage-token-cost">${usage.totalCostUSD.toFixed(2)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Rate limit meters (Codex) */}
+      {(usage.sessionLimit || usage.weeklyLimit) && (
+        <div className="usage-limits">
+          {usage.sessionLimit && (
+            <div className="usage-limit-row">
+              <div className="usage-limit-info">
+                <span className="usage-limit-label">Session (5h)</span>
+                <span className="usage-limit-reset">resets {fmtResetIn(usage.sessionLimit.resetsAt)}</span>
+              </div>
+              <div className="usage-limit-bar-wrap">
+                <div
+                  className={`usage-limit-bar${usage.sessionLimit.usedPct >= 80 ? ' is-danger' : usage.sessionLimit.usedPct >= 60 ? ' is-warn' : ''}`}
+                  style={{ width: `${Math.min(100, usage.sessionLimit.usedPct)}%` }}
+                />
+              </div>
+              <span className="usage-limit-pct">{usage.sessionLimit.usedPct.toFixed(0)}%</span>
+            </div>
+          )}
+          {usage.weeklyLimit && (
+            <div className="usage-limit-row">
+              <div className="usage-limit-info">
+                <span className="usage-limit-label">Weekly</span>
+                <span className="usage-limit-reset">resets {fmtResetIn(usage.weeklyLimit.resetsAt)}</span>
+              </div>
+              <div className="usage-limit-bar-wrap">
+                <div
+                  className={`usage-limit-bar${usage.weeklyLimit.usedPct >= 80 ? ' is-danger' : usage.weeklyLimit.usedPct >= 60 ? ' is-warn' : ''}`}
+                  style={{ width: `${Math.min(100, usage.weeklyLimit.usedPct)}%` }}
+                />
+              </div>
+              <span className="usage-limit-pct">{usage.weeklyLimit.usedPct.toFixed(0)}%</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function fmtDate(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(iso))
+  } catch { return iso }
+}
+
+function daysUntil(iso: string): number {
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000)
+}
+
+function QuotaMeter({
+  label,
+  usedPct,
+  resetsAt,
+  subtitle
+}: {
+  label: string
+  usedPct: number
+  resetsAt: number
+  subtitle?: string
+}): React.JSX.Element {
+  const pct = Math.min(100, usedPct)
+  const barClass = pct >= 80 ? ' is-danger' : pct >= 60 ? ' is-warn' : ''
+  return (
+    <div className="quota-meter">
+      <div className="quota-meter-header">
+        <span className="quota-meter-label">{label}</span>
+        <span className="quota-meter-right">
+          <span className="quota-meter-pct" style={{ color: pct >= 80 ? 'oklch(0.58 0.2 25)' : pct >= 60 ? 'oklch(0.7 0.15 85)' : undefined }}>
+            {pct.toFixed(0)}%
+          </span>
+          {resetsAt > 0 && (
+            <span className="quota-meter-reset">resets {fmtResetIn(resetsAt)}</span>
+          )}
+        </span>
+      </div>
+      <div className="usage-limit-bar-wrap">
+        <div className={`usage-limit-bar${barClass}`} style={{ width: `${pct}%` }} />
+      </div>
+      {subtitle && <span className="quota-meter-sub">{subtitle}</span>}
+    </div>
+  )
+}
+
+function CodexQuotaCard({ quota }: { quota: CodexQuota }): React.JSX.Element {
+  const days = quota.subscriptionEndsAt ? daysUntil(quota.subscriptionEndsAt) : null
+  const renewsLabel = quota.subscriptionEndsAt ? fmtDate(quota.subscriptionEndsAt) : null
 
   return (
-    <>
-      <img alt="logo" className="logo" src={electronLogo} />
-      <div className="creator">Powered by electron-vite</div>
-      <div className="text">
-        Build an Electron app with <span className="react">React</span>
-        &nbsp;and <span className="ts">TypeScript</span>
+    <div className="quota-card">
+      <div className="quota-card-header">
+        <span className="quota-card-dot" style={{ background: AGENT_COLORS.codex }} aria-hidden="true" />
+        <span className="quota-card-title">Codex Subscription</span>
+        <span className="quota-card-plan">{quota.planType.toUpperCase()}</span>
       </div>
-      <p className="tip">
-        Please try pressing <code>F12</code> to open the devTool
-      </p>
-      <div className="actions">
-        <div className="action">
-          <a href="https://electron-vite.org/" target="_blank" rel="noreferrer">
-            Documentation
-          </a>
+
+      {renewsLabel && (
+        <div className="quota-subscription-row">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.5" y="3.5" width="13" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
+            <path d="M5 1.5v4M11 1.5v4M1.5 7.5h13" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          </svg>
+          <span className="quota-subscription-date">Renews {renewsLabel}</span>
+          {days !== null && (
+            <span className={`quota-subscription-days${days <= 3 ? ' is-soon' : ''}`}>
+              {days > 0 ? `${days}d left` : 'Today'}
+            </span>
+          )}
         </div>
-        <div className="action">
-          <a target="_blank" rel="noreferrer" onClick={ipcHandle}>
-            Send IPC
-          </a>
+      )}
+
+      <div className="quota-meters">
+        <QuotaMeter
+          label="Session (5h)"
+          usedPct={quota.sessionUsedPct}
+          resetsAt={quota.sessionResetsAt}
+        />
+        <QuotaMeter
+          label="Weekly"
+          usedPct={quota.weeklyUsedPct}
+          resetsAt={quota.weeklyResetsAt}
+        />
+        {quota.additionalLimits.map((lim) => (
+          <QuotaMeter
+            key={lim.name}
+            label={lim.name}
+            usedPct={lim.sessionUsedPct}
+            resetsAt={lim.sessionResetsAt}
+            subtitle={lim.weeklyUsedPct != null ? `Weekly: ${lim.weeklyUsedPct.toFixed(0)}%` : undefined}
+          />
+        ))}
+      </div>
+
+      {quota.hasCredits && (
+        <div className="quota-credits-row">
+          <span className="quota-credits-label">Credits</span>
+          <span className="quota-credits-value">${quota.creditBalance}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function statusToClass(s: string): string {
+  const map: Record<string, string> = {
+    '?': 'untracked',
+    A: 'added',
+    M: 'modified',
+    D: 'deleted',
+    R: 'renamed',
+    C: 'copied',
+    U: 'unmerged'
+  }
+  return map[primaryStatusCode(s)] ?? 'unknown'
+}
+
+function primaryStatusCode(status: string): string {
+  if (!status.trim()) {
+    return '?'
+  }
+
+  if (status.includes('?')) {
+    return '?'
+  }
+
+  for (const code of ['U', 'A', 'M', 'D', 'R', 'C']) {
+    if (status.includes(code)) {
+      return code
+    }
+  }
+
+  return status.trim().charAt(0) || '?'
+}
+
+function statusLabel(status: string): string {
+  const code = primaryStatusCode(status)
+  return code === '?' ? '??' : code
+}
+
+function groupChangesByDir(
+  changes: WorkspaceChangesSnapshot['changes']
+): Array<{ dir: string; files: Array<{ name: string; path: string; status: string }> }> {
+  const map = new Map<string, Array<{ name: string; path: string; status: string }>>()
+  for (const c of changes) {
+    const parts = c.path.split('/')
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : 'Root Path'
+    const name = parts.at(-1) ?? c.path
+    if (!map.has(dir)) map.set(dir, [])
+    map.get(dir)!.push({ name, path: c.path, status: c.status })
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => {
+      if (a === 'Root Path') return -1
+      if (b === 'Root Path') return 1
+      return a.localeCompare(b)
+    })
+    .map(([dir, files]) => ({ dir, files }))
+}
+const EMPTY_WORKSPACE_CHANGES: WorkspaceChangesSnapshot = {
+  isGitRepo: false,
+  branch: null,
+  upstream: null,
+  ahead: 0,
+  behind: 0,
+  hasRemote: false,
+  publishRemote: null,
+  changes: []
+}
+
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 480
+const DEFAULT_LEFT = 260
+const DEFAULT_RIGHT = 320
+
+function loadSidebarWidths(): [number, number] {
+  try {
+    const s = localStorage.getItem('harmony-sidebar-widths')
+    if (s) {
+      const [l, r] = JSON.parse(s) as [number, number]
+      if (typeof l === 'number' && typeof r === 'number') {
+        return [
+          Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, l)),
+          Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, r))
+        ]
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return [DEFAULT_LEFT, DEFAULT_RIGHT]
+}
+
+function saveSidebarWidths(left: number, right: number): void {
+  try {
+    localStorage.setItem('harmony-sidebar-widths', JSON.stringify([left, right]))
+  } catch {
+    /* ignore */
+  }
+}
+
+const OPENED_FOLDERS_KEY = 'harmony-opened-folders'
+
+function loadOpenedFolders(): string[] {
+  try {
+    const s = localStorage.getItem(OPENED_FOLDERS_KEY)
+    if (s) {
+      const parsed = JSON.parse(s) as unknown
+      if (Array.isArray(parsed) && parsed.every((p) => typeof p === 'string')) {
+        return parsed
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+function saveOpenedFolders(folders: string[]): void {
+  try {
+    localStorage.setItem(OPENED_FOLDERS_KEY, JSON.stringify(folders))
+  } catch {
+    /* ignore */
+  }
+}
+
+function clampSidebar(w: number): number {
+  return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w))
+}
+
+function leafPath(p: string): string {
+  return p.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? p
+}
+
+
+const SOURCE_COLORS: Record<string, string> = {
+  cursor:  '#111111',
+  agents:  '#6366f1',
+  codex:   '#10a37f',
+  claude:  '#d4832a',
+  gemini:  '#4285f4',
+  openai:  '#10a37f',
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  agents:  'Agent Skills',
+  cursor:  'Cursor Skills',
+  codex:   'Codex Skills',
+  claude:  'Claude Skills',
+  gemini:  'Gemini Skills',
+  openai:  'OpenAI Skills',
+}
+
+function sourceColor(src: string): string {
+  return SOURCE_COLORS[src.toLowerCase()] ?? '#6b7280'
+}
+
+function sourceLabel(src: string): string {
+  return SOURCE_LABELS[src.toLowerCase()] ?? src.charAt(0).toUpperCase() + src.slice(1)
+}
+
+
+function groupSkillsBySource(
+  skills: import('../../shared/workbench').SkillSummary[]
+): Array<{ source: string; items: import('../../shared/workbench').SkillSummary[] }> {
+  const map = new Map<string, import('../../shared/workbench').SkillSummary[]>()
+  for (const s of skills) {
+    if (!map.has(s.source)) map.set(s.source, [])
+    map.get(s.source)!.push(s)
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([source, items]) => ({ source, items }))
+}
+
+function AccordionSection({
+  id,
+  label,
+  count,
+  accent,
+  open,
+  onToggle,
+  children,
+}: {
+  id: string
+  label: string
+  count: number
+  accent?: string
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}): JSX.Element {
+  return (
+    <div className="accord-section">
+      <button
+        className="accord-hd"
+        type="button"
+        aria-expanded={open}
+        aria-controls={`accord-body-${id}`}
+        onClick={onToggle}
+      >
+        {accent && (
+          <span className="accord-accent" style={{ background: accent }} aria-hidden="true" />
+        )}
+        <span className="accord-label">{label}</span>
+        <span className="accord-count">{count}</span>
+        <svg
+          className={`accord-chevron${open ? ' is-open' : ''}`}
+          width="12"
+          height="12"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div id={`accord-body-${id}`} className="accord-body">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function App(): React.JSX.Element {
+  const [theme, setTheme] = useTheme()
+  const [[leftWidth, rightWidth], setSidebarWidths] = useState(loadSidebarWidths)
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth <= 860)
+  const [worktrees, setWorktrees] = useState<WorktreeSummary[]>([])
+  const [openedFolders, setOpenedFolders] = useState<string[]>(loadOpenedFolders)
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 860px)')
+    const handler = (): void => setIsNarrow(mq.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+
+  const widthsRef = useRef<[number, number]>([leftWidth, rightWidth])
+  useEffect(() => {
+    widthsRef.current = [leftWidth, rightWidth]
+  }, [leftWidth, rightWidth])
+
+  const startResizeLeft = useCallback(
+    (e: React.MouseEvent): void => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = leftWidth
+      const onMove = (ev: MouseEvent): void => {
+        const delta = ev.clientX - startX
+        setSidebarWidths(([, r]) => {
+          const next: [number, number] = [clampSidebar(startW + delta), r]
+          widthsRef.current = next
+          return next
+        })
+      }
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        saveSidebarWidths(widthsRef.current[0], widthsRef.current[1])
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [leftWidth]
+  )
+
+  const startResizeRight = useCallback(
+    (e: React.MouseEvent): void => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = rightWidth
+      const onMove = (ev: MouseEvent): void => {
+        const delta = startX - ev.clientX
+        setSidebarWidths(([l]) => {
+          const next: [number, number] = [l, clampSidebar(startW + delta)]
+          widthsRef.current = next
+          return next
+        })
+      }
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        saveSidebarWidths(widthsRef.current[0], widthsRef.current[1])
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [rightWidth]
+  )
+  const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null)
+  const [selectedWt, setSelectedWt] = useState<string | null>(null)
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [status, setStatus] = useState('Loading\u2026')
+  const [rightTab, setRightTab] = useState<RightTab>('changes')
+  const [commitMsg, setCommitMsg] = useState('')
+  const [openAccordions, setOpenAccordions] = useState<Set<string>>(() => new Set(['subagents', 'mcp']))
+  const [workspaceChanges, setWorkspaceChanges] =
+    useState<WorkspaceChangesSnapshot>(EMPTY_WORKSPACE_CHANGES)
+  const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null)
+  const [sessionStats, setSessionStats] = useState<SessionStat[]>([])
+  const [usageData, setUsageData] = useState<AgentUsage[]>([])
+  const [codexQuota, setCodexQuota] = useState<CodexQuota | null>(null)
+  const [isGeneratingCommitMsg, setIsGeneratingCommitMsg] = useState(false)
+  const [isStagingChanges, setIsStagingChanges] = useState(false)
+  const [isCommitting, setIsCommitting] = useState(false)
+  const [isPublishing, setIsPublishing] = useState(false)
+  const wtRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    wtRef.current = selectedWt
+  }, [selectedWt])
+
+  useEffect(() => {
+    saveOpenedFolders(openedFolders)
+  }, [openedFolders])
+
+  const activeChanges = selectedWt ? workspaceChanges : EMPTY_WORKSPACE_CHANGES
+
+  useEffect(() => {
+    let cancelled = false
+
+    void window.api.getContextInfo().then((info) => {
+      if (!cancelled) {
+        setContextInfo(info)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Poll opencode session stats every 30 s while a workspace is active
+  useEffect(() => {
+    if (!selectedWt) return
+    let cancelled = false
+
+    const fetchStats = (): void => {
+      void window.api.listSessionStats(selectedWt).then((rows) => {
+        if (!cancelled) setSessionStats(rows)
+      })
+    }
+
+    fetchStats()
+    const timer = window.setInterval(fetchStats, 30_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [selectedWt])
+
+  // Poll usage summary every 60 s
+  useEffect(() => {
+    let cancelled = false
+    const fetchUsage = (): void => {
+      void window.api.getUsageSummary().then((rows) => {
+        if (!cancelled) setUsageData(rows)
+      })
+    }
+    fetchUsage()
+    const timer = window.setInterval(fetchUsage, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  // Poll Codex quota every 5 min (cached server-side)
+  useEffect(() => {
+    let cancelled = false
+    const fetchQuota = (): void => {
+      void window.api.getCodexQuota().then((q) => {
+        if (!cancelled) setCodexQuota(q)
+      })
+    }
+    fetchQuota()
+    const timer = window.setInterval(fetchQuota, 5 * 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const refreshChanges = useCallback(async (workspacePath: string): Promise<void> => {
+    try {
+      const changes = await window.api.listWorkspaceChanges(workspacePath)
+      setWorkspaceChanges(changes)
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Failed to load changes')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedWt) {
+      return
+    }
+
+    void refreshChanges(selectedWt)
+  }, [refreshChanges, selectedWt])
+
+  const openFile = useCallback((wt: string, path: string): void => {
+    void wt
+    setSelectedFile(path)
+    setStatus(`Opened ${leafName(path)}`)
+  }, [])
+
+  const loadWorkspace = useCallback(
+    async (wt: string, preferFile?: string) => {
+      try {
+        const snap = await window.api.getWorkspace(wt)
+        setWorkspace(snap)
+        setSelectedWt(wt)
+        const next =
+          preferFile && hasFile(snap.entries, preferFile) ? preferFile : findFirstFile(snap.entries)
+        if (next) {
+          openFile(wt, next)
+        } else {
+          setSelectedFile(null)
+          setStatus('Workspace loaded')
+        }
+      } catch (err: unknown) {
+        setStatus(err instanceof Error ? err.message : 'Load failed')
+      }
+    },
+    [openFile]
+  )
+
+  const workspaces = useMemo((): WorkspaceItem[] => {
+    const wtPaths = new Set(worktrees.map((w) => w.path))
+    const items: WorkspaceItem[] = [...worktrees]
+    for (const path of openedFolders) {
+      if (wtPaths.has(path)) continue
+      items.push({
+        id: path,
+        name: leafPath(path),
+        path,
+        repoRoot: path,
+        branch: '—',
+        head: '',
+        isMain: false,
+        isLocked: false,
+        isOpenedFolder: true
+      })
+    }
+    return items
+  }, [worktrees, openedFolders])
+
+  const refresh = useCallback(
+    async (preferWt?: string, preferFile?: string) => {
+      setStatus('Loading\u2026')
+      try {
+        const wts = await window.api.listWorktrees(openedFolders.length ? openedFolders : undefined)
+        setWorktrees(wts)
+        const fallback =
+          preferWt ??
+          wtRef.current ??
+          wts.find((w) => w.isMain)?.path ??
+          wts[0]?.path ??
+          openedFolders[0]
+        if (!fallback) {
+          setWorkspace(null)
+          setSelectedWt(null)
+          setSelectedFile(null)
+          setStatus('No workspaces')
+          return
+        }
+        await loadWorkspace(fallback, preferFile)
+      } catch (err: unknown) {
+        setStatus(err instanceof Error ? err.message : 'Refresh failed')
+      }
+    },
+    [loadWorkspace, openedFolders]
+  )
+
+  useEffect(() => {
+    const t = window.setTimeout(() => void refresh(), 0)
+    return () => window.clearTimeout(t)
+  }, [refresh])
+
+  const handleOpenFolder = useCallback(async (): Promise<void> => {
+    try {
+      const path = await window.api.openFolder()
+      if (!path) return
+      setOpenedFolders((prev) => (prev.includes(path) ? prev : [...prev, path]))
+      await loadWorkspace(path)
+      setStatus(`Opened ${leafPath(path)}`)
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Open failed')
+    }
+  }, [loadWorkspace])
+
+  const handleCreateWorktree = useCallback(
+    async (branch: string, workspacePath?: string): Promise<void> => {
+      try {
+        const path = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0]
+        const worktree = await window.api.createWorktree({ branch, workspacePath: path })
+        await refresh(worktree.path)
+        setStatus(`Created ${worktree.name}`)
+      } catch (err: unknown) {
+        setStatus(err instanceof Error ? err.message : 'Create failed')
+      }
+    },
+    [refresh, selectedWt, worktrees, openedFolders]
+  )
+
+  const handleRefreshChanges = useCallback((): void => {
+    if (!selectedWt) {
+      return
+    }
+
+    void refreshChanges(selectedWt)
+  }, [refreshChanges, selectedWt])
+
+  const handleGenerateCommitMessage = useCallback(async (): Promise<void> => {
+    if (!selectedWt) {
+      return
+    }
+
+    try {
+      setIsGeneratingCommitMsg(true)
+      const result = await window.api.generateCommitMessage({ workspacePath: selectedWt })
+      setCommitMsg(result.message)
+      setStatus(
+        result.usedFallback
+          ? `Generated commit message with ${result.provider}.`
+          : `Generated commit message with ${result.provider}.`
+      )
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Failed to generate commit message')
+    } finally {
+      setIsGeneratingCommitMsg(false)
+    }
+  }, [selectedWt])
+
+  const handleStageAllChanges = useCallback(async (): Promise<void> => {
+    if (!selectedWt) {
+      return
+    }
+
+    try {
+      setIsStagingChanges(true)
+      const result = await window.api.stageWorkspaceChanges({ workspacePath: selectedWt })
+      await refreshChanges(selectedWt)
+      setStatus(result.summary)
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Failed to stage changes')
+    } finally {
+      setIsStagingChanges(false)
+    }
+  }, [refreshChanges, selectedWt])
+
+  const handleCommitChanges = useCallback(async (): Promise<void> => {
+    if (!selectedWt) {
+      return
+    }
+
+    try {
+      setIsCommitting(true)
+      const result = await window.api.commitWorkspaceChanges({
+        workspacePath: selectedWt,
+        message: commitMsg,
+        stageAll: true
+      })
+      setCommitMsg('')
+      await refreshChanges(selectedWt)
+      setStatus(result.summary)
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Failed to create commit')
+    } finally {
+      setIsCommitting(false)
+    }
+  }, [commitMsg, refreshChanges, selectedWt])
+
+  const handlePublishBranch = useCallback(
+    async (chooseRemote: boolean): Promise<void> => {
+      if (!selectedWt) {
+        return
+      }
+
+      let remote: string | undefined
+
+      if (chooseRemote) {
+        const entered = window.prompt('Publish branch to remote:', activeChanges.publishRemote ?? 'origin')
+        if (entered === null) {
+          return
+        }
+
+        remote = entered.trim()
+        if (!remote) {
+          setStatus('Remote name is required.')
+          return
+        }
+      }
+
+      try {
+        setIsPublishing(true)
+        const result = await window.api.publishBranch({ workspacePath: selectedWt, remote })
+        await refreshChanges(selectedWt)
+        setStatus(result.summary)
+      } catch (err: unknown) {
+        setStatus(err instanceof Error ? err.message : 'Failed to publish branch')
+      } finally {
+        setIsPublishing(false)
+      }
+    },
+    [activeChanges.publishRemote, refreshChanges, selectedWt]
+  )
+
+  const handleRemove = useCallback(
+    async (path: string, isOpenedFolder: boolean): Promise<void> => {
+      const name = workspaces.find((w) => w.path === path)?.name ?? path
+      if (!window.confirm(`Remove "${name}" from list?`)) return
+      if (isOpenedFolder) {
+        setOpenedFolders((prev) => prev.filter((p) => p !== path))
+        if (selectedWt === path) {
+          const fallback = workspaces.find((w) => w.path !== path)?.path ?? undefined
+          await refresh(fallback)
+        }
+        setStatus(`Removed ${name}`)
+      } else {
+        try {
+          await window.api.removeWorktree({ path })
+          const fallback =
+            selectedWt === path
+              ? (workspaces.find((w) => w.isMain && w.path !== path)?.path ??
+                workspaces.find((w) => w.path !== path)?.path)
+              : (selectedWt ?? undefined)
+          await refresh(fallback)
+          setStatus(`Removed ${name}`)
+        } catch (err: unknown) {
+          setStatus(err instanceof Error ? err.message : 'Remove failed')
+        }
+      }
+    },
+    [refresh, selectedWt, workspaces]
+  )
+
+  const wt = useMemo(
+    () => worktrees.find((w) => w.path === selectedWt) ?? null,
+    [selectedWt, worktrees]
+  )
+  const branch = activeChanges.branch ?? wt?.branch ?? '\u2014'
+  const label = leafName(workspace?.rootPath ?? null)
+  const files = useMemo(() => countFiles(workspace?.entries ?? []), [workspace])
+  const skillsCount = contextInfo?.skills.length ?? 0
+  const mcpCount = contextInfo?.mcpServers.length ?? 0
+  const changesCount = activeChanges.changes.length
+  const publishLabel = activeChanges.upstream ? 'Push Branch' : 'Publish Branch'
+  const publishMeta = !activeChanges.isGitRepo
+    ? 'Open a git repository to enable source control.'
+    : activeChanges.upstream
+      ? `${activeChanges.upstream}${activeChanges.ahead > 0 ? ` • ahead ${activeChanges.ahead}` : ''}${activeChanges.behind > 0 ? ` • behind ${activeChanges.behind}` : ''}`
+      : activeChanges.hasRemote
+        ? `Ready to publish to ${activeChanges.publishRemote ?? 'origin'}`
+        : 'No git remote found.'
+  const canGenerateCommitMessage =
+    Boolean(selectedWt) && activeChanges.isGitRepo && changesCount > 0 && !isGeneratingCommitMsg
+  const canCommit =
+    Boolean(selectedWt) &&
+    activeChanges.isGitRepo &&
+    changesCount > 0 &&
+    commitMsg.trim().length > 0 &&
+    !isCommitting
+  const canPublish =
+    Boolean(selectedWt) &&
+    activeChanges.isGitRepo &&
+    activeChanges.hasRemote &&
+    Boolean(activeChanges.branch) &&
+    !isPublishing
+  const groupedChanges = useMemo(
+    () => groupChangesByDir(activeChanges.changes),
+    [activeChanges.changes]
+  )
+  const groupedSkills = useMemo(
+    () => groupSkillsBySource(contextInfo?.skills ?? []),
+    [contextInfo]
+  )
+  const subagentsList = contextInfo?.subagents ?? []
+
+  const toggleAccordion = useCallback((id: string): void => {
+    setOpenAccordions((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  return (
+    <div className="shell">
+      {/* aria-live region for async status announcements */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {status}
+      </div>
+
+      <header className="titlebar">
+        <div className="titlebar-main">
+          <span className="titlebar-app">Harmony</span>
+          <div className="titlebar-meta">
+            {branch && branch !== '—' && <span className="titlebar-branch-pill">{branch}</span>}
+            {changesCount > 0 && (
+              <span className="titlebar-changes-badge">{changesCount} changes</span>
+            )}
+          </div>
+        </div>
+        <div className="titlebar-actions">
+          <button
+            className="titlebar-btn"
+            type="button"
+            aria-label={`Theme: ${THEME_LABELS[theme]}. Click to switch.`}
+            title={THEME_LABELS[theme]}
+            onClick={() => {
+              const next = THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length]
+              setTheme(next)
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              {theme === 'dark' ? (
+                <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.2 3.1A4.5 4.5 0 0 1 12.9 9.8 6.5 6.5 0 0 1 6.2 3.1Z" fill="currentColor"/>
+              ) : theme === 'light' ? (
+                <path d="M8 3.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9ZM8 2a.5.5 0 0 0 .5-.5v-1a.5.5 0 0 0-1 0v1A.5.5 0 0 0 8 2Zm0 12a.5.5 0 0 0-.5.5v1a.5.5 0 0 0 1 0v-1A.5.5 0 0 0 8 14ZM2 8a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0 0 1h1A.5.5 0 0 0 2 8Zm12 0a.5.5 0 0 0 .5.5h1a.5.5 0 0 0 0-1h-1A.5.5 0 0 0 14 8ZM3.8 3.8a.5.5 0 0 0-.7-.7l-.7.7a.5.5 0 0 0 .7.7l.7-.7Zm8.4 8.4a.5.5 0 0 0 .7.7l.7-.7a.5.5 0 0 0-.7-.7l-.7.7ZM3.8 12.2a.5.5 0 0 0-.7.7l.7.7a.5.5 0 0 0 .7-.7l-.7-.7Zm8.4-8.4a.5.5 0 0 0 .7-.7l-.7-.7a.5.5 0 0 0-.7.7l.7.7Z" fill="currentColor"/>
+              ) : (
+                <path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM3.5 8a4.5 4.5 0 0 1 4.5-4.5v9A4.5 4.5 0 0 1 3.5 8Z" fill="currentColor"/>
+              )}
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div
+        className="layout"
+        style={
+          isNarrow
+            ? undefined
+            : {
+                gridTemplateColumns: `${leftWidth}px 4px minmax(0, 1fr) 4px ${rightWidth}px`
+              }
+        }
+      >
+        {/* ── Left: Workspaces ── */}
+        <div className="panel-left">
+          <WorktreePanel
+            workspaces={workspaces}
+            selectedPath={selectedWt}
+            onSelect={(p) => void loadWorkspace(p)}
+            onCreate={handleCreateWorktree}
+            onOpenFolder={handleOpenFolder}
+            onRemove={handleRemove}
+          />
+        </div>
+
+        {!isNarrow && (
+          <div
+            className="resize-handle resize-handle-left"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize left sidebar"
+            tabIndex={0}
+            onMouseDown={startResizeLeft}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault()
+                const delta = e.key === 'ArrowRight' ? 8 : -8
+                setSidebarWidths(([, r]) => {
+                  const next: [number, number] = [clampSidebar(leftWidth + delta), r]
+                  saveSidebarWidths(next[0], next[1])
+                  return next
+                })
+              }
+            }}
+          />
+        )}
+
+        {/* ── Center: Terminal ── */}
+        <div className="panel-center">
+          <TerminalPanel key={selectedWt ?? 'empty'} workspacePath={selectedWt} />
+        </div>
+
+        {!isNarrow && (
+          <div
+            className="resize-handle resize-handle-right"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize right sidebar"
+            tabIndex={0}
+            onMouseDown={startResizeRight}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault()
+                const delta = e.key === 'ArrowLeft' ? 8 : -8
+                setSidebarWidths(([l]) => {
+                  const next: [number, number] = [l, clampSidebar(rightWidth + delta)]
+                  saveSidebarWidths(next[0], next[1])
+                  return next
+                })
+              }
+            }}
+          />
+        )}
+
+        {/* ── Right: Source Control ── */}
+        <div className="panel-right">
+          {/* Tab bar */}
+          <div className="sc-tabbar" role="tablist" aria-label="Panel tabs">
+            {RIGHT_TABS.map((tab) => (
+              <button
+                key={tab}
+                id={`tab-${tab}`}
+                className={`sc-tab${rightTab === tab ? ' is-active' : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={rightTab === tab}
+                aria-controls={`panel-${tab}`}
+                onClick={() => setRightTab(tab)}
+              >
+                {RIGHT_TAB_LABELS[tab]}
+                {tab === 'changes' && changesCount > 0 && (
+                  <span className="sc-tab-badge">{changesCount}</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Panel body */}
+          <div
+            id={`panel-${rightTab}`}
+            className="sc-body"
+            role="tabpanel"
+            aria-labelledby={`tab-${rightTab}`}
+          >
+            {/* ── Changes ── */}
+            {rightTab === 'changes' && (
+              <div className="sc-panel">
+                {/* Toolbar */}
+                <div className="sc-toolbar">
+                  <button
+                    className="sc-tool-btn"
+                    type="button"
+                    aria-label="Refresh changes"
+                    onClick={handleRefreshChanges}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.8 0 3.4.87 4.4 2.2L10.5 6.5H14V3l-1.6 1.6A7 7 0 1 0 15 8h-1.5Z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                  <div className="sc-toolbar-spacer" />
+                  <span className="sc-toolbar-branch">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M5 3.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0ZM3.5 6A2.5 2.5 0 0 0 6 3.5h2.5a1.5 1.5 0 1 0 0-1H6A3.5 3.5 0 0 0 2.5 6v4A2.5 2.5 0 1 0 5 10V6A1.5 1.5 0 0 1 6 4.5h2.5A1.5 1.5 0 1 0 9 3.5a1.5 1.5 0 0 0-1 .37V3.5H6A2.5 2.5 0 0 0 3.5 6Z" fill="currentColor"/>
+                    </svg>
+                    {branch}
+                  </span>
+                </div>
+
+                {/* Commit input */}
+                <div className="sc-commit-wrap">
+                  <textarea
+                    className="sc-commit-input"
+                    placeholder="Commit message"
+                    aria-label="Commit message"
+                    spellCheck={false}
+                    value={commitMsg}
+                    onChange={(e) => setCommitMsg(e.target.value)}
+                  />
+                  <div className="sc-commit-actions">
+                    <button
+                      className="sc-secondary-btn"
+                      type="button"
+                      disabled={!canGenerateCommitMessage}
+                      onClick={() => void handleGenerateCommitMessage()}
+                    >
+                      {isGeneratingCommitMsg ? 'Generating…' : 'AI Message'}
+                    </button>
+                    <button
+                      className="sc-commit-btn"
+                      type="button"
+                      disabled={!canCommit}
+                      onClick={() => void handleCommitChanges()}
+                    >
+                      {isCommitting ? 'Committing…' : 'Commit All'}
+                    </button>
+                  </div>
+                  {(status || isGeneratingCommitMsg) && status !== 'Loading…' && (
+                    <div
+                      className="sc-commit-status"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {isGeneratingCommitMsg && !status
+                        ? 'Calling AI…'
+                        : status}
+                    </div>
+                  )}
+                </div>
+
+                {/* Publish */}
+                <div className="sc-publish-row">
+                  <button
+                    className="sc-publish-btn"
+                    type="button"
+                    disabled={!canPublish}
+                    onClick={() => void handlePublishBranch(false)}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M8 2l5 5H9.5v7h-3V7H3L8 2Z" fill="currentColor"/>
+                    </svg>
+                    {isPublishing ? 'Publishing…' : publishLabel}
+                  </button>
+                  <button
+                    className="sc-publish-chevron"
+                    type="button"
+                    aria-label="Choose publish remote"
+                    disabled={!canPublish}
+                    onClick={() => void handlePublishBranch(true)}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
+                <div className="sc-publish-meta">{publishMeta}</div>
+
+                {/* File list */}
+                {!activeChanges.isGitRepo ? (
+                  <div className="empty-state">Not a git repository.</div>
+                ) : changesCount === 0 ? (
+                  <div className="empty-state">Working tree is clean.</div>
+                ) : (
+                  <div className="sc-file-list">
+                    <div className="sc-section-hd">
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M1 4h14M1 8h14M1 12h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      </svg>
+                      <span className="sc-section-label">Changes</span>
+                      <span className="sc-section-count">{changesCount}</span>
+                      <div className="sc-section-spacer" />
+                      <button
+                        className="sc-tool-btn"
+                        type="button"
+                        aria-label="Stage all changes"
+                        disabled={isStagingChanges || changesCount === 0}
+                        onClick={() => void handleStageAllChanges()}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M8 2v10M3 7l5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
+                    </div>
+
+                    {groupedChanges.map((group) => (
+                      <div key={group.dir} className="sc-dir-group">
+                        <div className="sc-dir-hd">
+                          <span className="sc-dir-name">{group.dir}</span>
+                          <span className="sc-dir-count">{group.files.length}</span>
+                        </div>
+                        {group.files.map((f) => (
+                          <div key={f.path} className="sc-file-row">
+                            <span
+                              className={`sc-status-dot sc-s-${statusToClass(f.status)}`}
+                              aria-label={statusLabel(f.status)}
+                            />
+                            <span className="sc-file-name">{f.name}</span>
+                            <span className="sc-file-badge">{statusLabel(f.status)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Files ── */}
+            {rightTab === 'files' && (
+              <div className="files-panel files-panel-full">
+                <div className="panel-subheader">
+                  <div>
+                    <div className="section-label">Workspace Files</div>
+                    <div className="section-title">{label}</div>
+                  </div>
+                  <span className="badge">{files}</span>
+                </div>
+                <div className="file-scroll">
+                  <FileTree
+                    entries={workspace?.entries ?? []}
+                    selectedPath={selectedFile}
+                    onSelect={(p) => {
+                      if (selectedWt) openFile(selectedWt, p)
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ── Inspector ── */}
+            {rightTab === 'inspector' && (
+              <div className="right-scroll">
+                <div className="accord-list">
+                  {/* Subagents — from OpenCode agent config files */}
+                  <AccordionSection
+                    id="subagents"
+                    label="Subagents"
+                    count={subagentsList.length}
+                    open={openAccordions.has('subagents')}
+                    onToggle={() => toggleAccordion('subagents')}
+                  >
+                    {subagentsList.length === 0 ? (
+                      <div className="empty-state">No OpenCode subagents found.<br />Add agents to <code>~/.config/opencode/agents/</code></div>
+                    ) : (
+                      subagentsList.map((agent) => (
+                        <div key={agent.id} className="accord-item accord-item-subagent">
+                          <span className="accord-item-dot" aria-hidden="true" />
+                          <span className="accord-item-name">{agent.name}</span>
+                          {agent.source === 'project' && (
+                            <span className="accord-item-chip">project</span>
+                          )}
+                          {agent.model && (
+                            <span className="accord-item-chip accord-item-chip-model">{agent.model.split('/').at(-1)}</span>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </AccordionSection>
+
+                  {/* Context Window — recent OpenCode sessions */}
+                  <AccordionSection
+                    id="context"
+                    label="Context Window"
+                    count={sessionStats.length}
+                    open={openAccordions.has('context')}
+                    onToggle={() => toggleAccordion('context')}
+                  >
+                    {sessionStats.length === 0 ? (
+                      <div className="empty-state">No sessions found for this workspace.</div>
+                    ) : (
+                      sessionStats.map((s) => {
+                        const total = s.inputTokens + s.outputTokens
+                        const totalK = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total)
+                        const pct = s.contextWindow ? Math.min(100, (total / s.contextWindow) * 100) : null
+                        const ctxK = s.contextWindow ? `${(s.contextWindow / 1000).toFixed(0)}k` : null
+                        const barClass = pct === null ? '' : pct >= 80 ? ' is-danger' : pct >= 60 ? ' is-warn' : ' is-ok'
+                        return (
+                          <div key={s.id} className="accord-item accord-item-session">
+                            <div className="session-row">
+                              <span className="session-title">{s.title || 'Untitled'}</span>
+                              <span className="session-tokens">{totalK}{ctxK && <span className="session-ctx-max">/{ctxK}</span>}</span>
+                            </div>
+                            {pct !== null && (
+                              <div className="session-bar-wrap" title={`${pct.toFixed(1)}% of context window`}>
+                                <div className={`session-bar${barClass}`} style={{ width: `${pct}%` }} />
+                              </div>
+                            )}
+                            <div className="session-meta">
+                              <span className="session-agent">{s.agent}</span>
+                              <span className="session-model">{s.model || '—'}</span>
+                              <span className="session-breakdown">
+                                ↑{(s.inputTokens / 1000).toFixed(1)}k&nbsp;↓{(s.outputTokens / 1000).toFixed(1)}k
+                                {s.cacheReadTokens > 0 && <>&nbsp;⚡{(s.cacheReadTokens / 1000).toFixed(1)}k</>}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                  </AccordionSection>
+
+                  {/* Skills grouped by source */}
+                  {skillsCount === 0 ? (
+                    <div className="empty-state">No skills detected.</div>
+                  ) : (
+                    groupedSkills.map((group) => {
+                      const accordId = `skill-${group.source}`
+                      const color = sourceColor(group.source)
+                      return (
+                        <AccordionSection
+                          key={group.source}
+                          id={accordId}
+                          label={sourceLabel(group.source)}
+                          count={group.items.length}
+                          accent={color}
+                          open={openAccordions.has(accordId)}
+                          onToggle={() => toggleAccordion(accordId)}
+                        >
+                          {group.items.map((skill) => (
+                            <div key={skill.id} className="accord-item">
+                              <span className="accord-item-dot" style={{ background: color }} aria-hidden="true" />
+                              <span className="accord-item-name">{skill.name}</span>
+                            </div>
+                          ))}
+                        </AccordionSection>
+                      )
+                    })
+                  )}
+
+                  {/* MCP Servers */}
+                  <AccordionSection
+                    id="mcp"
+                    label="MCP Servers"
+                    count={mcpCount}
+                    open={openAccordions.has('mcp')}
+                    onToggle={() => toggleAccordion('mcp')}
+                  >
+                    {mcpCount === 0 ? (
+                      <div className="empty-state">No MCP servers detected.</div>
+                    ) : (
+                      contextInfo!.mcpServers.map((server) => (
+                        <div key={server.id} className="accord-item">
+                          <span className="accord-item-dot" aria-hidden="true" />
+                          <span className="accord-item-name">{server.id}</span>
+                          <span className="accord-item-chip">{server.transport}</span>
+                        </div>
+                      ))
+                    )}
+                  </AccordionSection>
+                </div>
+              </div>
+            )}
+
+            {/* ── Usage ── */}
+            {rightTab === 'usage' && (
+              <div className="sc-panel usage-panel">
+                {/* Quota section header */}
+                <div className="usage-header">
+                  <span className="usage-header-label">Subscription Quota</span>
+                  <button
+                    className="sc-tool-btn"
+                    type="button"
+                    aria-label="Refresh quota"
+                    onClick={() => {
+                      void window.api.getCodexQuota().then(setCodexQuota)
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.8 0 3.4.87 4.4 2.2L10.5 6.5H14V3l-1.6 1.6A7 7 0 1 0 15 8h-1.5Z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                </div>
+
+                {codexQuota ? (
+                  <CodexQuotaCard quota={codexQuota} />
+                ) : (
+                  <div className="empty-state" style={{ padding: '12px 16px', fontSize: '11px' }}>
+                    Quota unavailable — check <code>~/.codex/auth.json</code>
+                  </div>
+                )}
+
+                {/* Token usage section header */}
+                <div className="usage-header" style={{ marginTop: '1px' }}>
+                  <span className="usage-header-label">Token Usage (30 days)</span>
+                  <button
+                    className="sc-tool-btn"
+                    type="button"
+                    aria-label="Refresh token usage"
+                    onClick={() => {
+                      void window.api.getUsageSummary().then(setUsageData)
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.8 0 3.4.87 4.4 2.2L10.5 6.5H14V3l-1.6 1.6A7 7 0 1 0 15 8h-1.5Z" fill="currentColor"/>
+                    </svg>
+                  </button>
+                </div>
+
+                {usageData.length === 0 ? (
+                  <div className="empty-state" style={{ padding: '12px 16px' }}>
+                    No usage data found.
+                  </div>
+                ) : (
+                  <div className="usage-cards">
+                    {usageData.map((u) => (
+                      <AgentUsageCard key={u.agent} usage={u} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-      <Versions></Versions>
-    </>
+    </div>
   )
 }
 
