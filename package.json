@@ -1,6 +1,6 @@
 {
   "name": "harmony",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Harmony desktop app for managing worktrees, terminals, and AI coding agents.",
   "main": "./out/main/index.js",
   "author": "Haoxiang Jia",
@@ -24,6 +24,7 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "electron-updater": "^6.8.3",
     "node-pty": "^1.0.0",
     "react-grab": "^0.1.28"
   },
@@ -50,5 +51,38 @@
     "react-dom": "^19.2.1",
     "typescript": "^5.9.3",
     "vite": "^7.2.6"
+  },
+  "build": {
+    "appId": "com.jiatastic.harmony",
+    "productName": "Harmony",
+    "mac": {
+      "artifactName": "Harmony.${ext}",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "artifactName": "Harmony-Setup.${ext}",
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "artifactName": "Harmony.${ext}",
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jiatastic",
+        "repo": "harmony",
+        "releaseType": "release"
+      }
+    ]
   }
 }

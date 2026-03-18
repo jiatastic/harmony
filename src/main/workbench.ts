@@ -20,7 +20,7 @@ import {
 import { harmonyChannels } from '../shared/workbench'
 import { ensureBundledSkillsInstalled } from './bundledSkills'
 import { registerSourceControlIpc } from './sourceControl'
-import { registerWorktreeIpc } from './worktree'
+import { disposeWorkspaceWatches, registerWorktreeIpc } from './worktree'
 
 let detachTerminalDataListener: (() => void) | null = null
 let detachTerminalExitListener: (() => void) | null = null
@@ -786,6 +786,7 @@ export function disposeWorkbench(): void {
   detachTerminalExitListener?.()
   detachTerminalExitListener = null
 
+  disposeWorkspaceWatches()
   disposeAgentRuns()
   disposeTerminalSessions()
 }

@@ -4,6 +4,7 @@ import { FileTree } from './components/FileTree'
 import { TerminalPanel } from './components/TerminalPanel'
 import { WorktreePanel, type WorkspaceItem } from './components/WorktreePanel'
 import type {
+  AppUpdateState,
   AgentUsage,
   CodexQuota,
   ContextInfo,
@@ -91,6 +92,10 @@ function leafName(p: string | null): string {
 
 const THEME_CYCLE: Theme[] = ['light', 'dark', 'system']
 const THEME_LABELS: Record<Theme, string> = { light: 'Light', dark: 'Dark', system: 'System' }
+const EMPTY_UPDATE_STATE: AppUpdateState = {
+  phase: 'idle',
+  currentVersion: ''
+}
 const RIGHT_TABS = ['changes', 'files', 'inspector', 'usage'] as const
 type RightTab = (typeof RIGHT_TABS)[number]
 const RIGHT_TAB_LABELS: Record<RightTab, string> = {
@@ -443,6 +448,49 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
+function shouldShowUpdateAction(state: AppUpdateState): boolean {
+  return state.phase !== 'unsupported'
+}
+
+function updateActionLabel(state: AppUpdateState): string {
+  switch (state.phase) {
+    case 'idle':
+    case 'not-available':
+      return 'Check Updates'
+    case 'checking':
+      return 'Checking…'
+    case 'available':
+      return state.availableVersion ? `Update ${state.availableVersion}` : 'Download Update'
+    case 'downloading':
+      return state.progressPercent != null
+        ? `Downloading ${state.progressPercent.toFixed(0)}%`
+        : 'Downloading…'
+    case 'downloaded':
+      return 'Restart to Update'
+    case 'error':
+      return 'Retry Update'
+    default:
+      return 'Check Updates'
+  }
+}
+
+function updateActionTitle(state: AppUpdateState): string {
+  switch (state.phase) {
+    case 'idle':
+      return 'Check for updates.'
+    case 'not-available':
+      return state.message ?? 'Harmony is up to date.'
+    case 'available':
+      return state.message ?? 'Download the latest Harmony release.'
+    case 'downloaded':
+      return state.message ?? 'Restart Harmony to install the update.'
+    case 'error':
+      return state.message ?? 'Retry checking for updates.'
+    default:
+      return state.message ?? 'Check for updates.'
+  }
+}
+
 
 const SOURCE_COLORS: Record<string, string> = {
   cursor:  '#111111',
@@ -628,6 +676,7 @@ function App(): React.JSX.Element {
   const [sessionStats, setSessionStats] = useState<SessionStat[]>([])
   const [usageData, setUsageData] = useState<AgentUsage[]>([])
   const [codexQuota, setCodexQuota] = useState<CodexQuota | null>(null)
+  const [updateState, setUpdateState] = useState<AppUpdateState>(EMPTY_UPDATE_STATE)
   const [isGeneratingCommitMsg, setIsGeneratingCommitMsg] = useState(false)
   const [isStagingChanges, setIsStagingChanges] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
@@ -655,6 +704,27 @@ function App(): React.JSX.Element {
 
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void window.api.getUpdateState().then((state) => {
+      if (!cancelled) {
+        setUpdateState(state)
+      }
+    })
+
+    const off = window.api.onUpdateState((state) => {
+      if (!cancelled) {
+        setUpdateState(state)
+      }
+    })
+
+    return () => {
+      cancelled = true
+      off()
     }
   }, [])
 
@@ -724,6 +794,51 @@ function App(): React.JSX.Element {
     }
 
     void refreshChanges(selectedWt)
+  }, [refreshChanges, selectedWt])
+
+  useEffect(() => {
+    if (!selectedWt) {
+      return
+    }
+
+    let stopWatching: (() => Promise<void>) | null = null
+    let debounceTimer: number | null = null
+    let cancelled = false
+
+    void window.api
+      .watchWorkspaceChanges(selectedWt, () => {
+        if (debounceTimer !== null) {
+          window.clearTimeout(debounceTimer)
+        }
+
+        // Debounce bursts from editors and git operations into a single refresh.
+        debounceTimer = window.setTimeout(() => {
+          if (wtRef.current === selectedWt) {
+            void refreshChanges(selectedWt)
+          }
+        }, 350)
+      })
+      .then((dispose) => {
+        if (cancelled) {
+          void dispose()
+          return
+        }
+
+        stopWatching = dispose
+      })
+      .catch(() => {
+        // Watching is best-effort; manual refresh remains available.
+      })
+
+    return () => {
+      cancelled = true
+      if (debounceTimer !== null) {
+        window.clearTimeout(debounceTimer)
+      }
+      if (stopWatching) {
+        void stopWatching()
+      }
+    }
   }, [refreshChanges, selectedWt])
 
   const openFile = useCallback((wt: string, path: string): void => {
@@ -1014,6 +1129,22 @@ function App(): React.JSX.Element {
     })
   }, [])
 
+  const handleUpdateAction = useCallback((): void => {
+    if (updateState.phase === 'available') {
+      void window.api.downloadUpdate()
+      return
+    }
+
+    if (updateState.phase === 'downloaded') {
+      void window.api.installUpdateAndRestart()
+      return
+    }
+
+    if (updateState.phase === 'idle' || updateState.phase === 'not-available' || updateState.phase === 'error') {
+      void window.api.checkForUpdates()
+    }
+  }, [updateState.phase])
+
   const handleThemeToggle = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
     const next = THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length]
     const doc = document as DocumentWithThemeTransition
@@ -1071,6 +1202,17 @@ function App(): React.JSX.Element {
           </div>
         </div>
         <div className="titlebar-actions">
+          {shouldShowUpdateAction(updateState) && (
+            <button
+              className={`titlebar-update-btn is-${updateState.phase}`}
+              type="button"
+              title={updateActionTitle(updateState)}
+              disabled={updateState.phase === 'checking' || updateState.phase === 'downloading'}
+              onClick={handleUpdateAction}
+            >
+              {updateActionLabel(updateState)}
+            </button>
+          )}
           <button
             className="titlebar-btn"
             type="button"
@@ -1139,7 +1281,7 @@ function App(): React.JSX.Element {
 
         {/* ── Center: Terminal ── */}
         <div className="panel-center">
-          <TerminalPanel key={selectedWt ?? 'empty'} workspacePath={selectedWt} />
+          <TerminalPanel workspacePath={selectedWt} />
         </div>
 
         {!isNarrow && (

@@ -1,14 +1,16 @@
 import { execFile } from 'node:child_process'
-import { promises as fs } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { promises as fs, watch as watchFs, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
-import { ipcMain } from 'electron'
+import { ipcMain, type WebContents } from 'electron'
 import type {
   WorkspaceChange,
   WorkspaceChangesSnapshot,
   FileDocument,
   ReadFilePayload,
   SaveFilePayload,
+  WorkspaceWatchEvent,
   WorktreeCreatePayload,
   WorktreeSummary,
   WorkspaceEntry,
@@ -21,6 +23,15 @@ const MAX_TREE_DEPTH = 4
 const MAX_TREE_NODES = 600
 
 let repositoryRootPromise: Promise<string> | null = null
+const workspaceWatchers = new Map<string, WorkspaceWatchRegistration>()
+
+interface WorkspaceWatchRegistration {
+  id: string
+  workspacePath: string
+  ownerId: number
+  sender: WebContents
+  watchers: FSWatcher[]
+}
 
 async function getRepositoryRootFromPath(path: string): Promise<string> {
   return runGit(['rev-parse', '--show-toplevel'], resolve(path)).then((out) => resolve(out))
@@ -408,6 +419,99 @@ async function listWorkspaceChanges(workspacePath: string): Promise<WorkspaceCha
   }
 }
 
+async function resolveGitWatchPaths(workspacePath: string): Promise<string[]> {
+  const rootPath = await resolveWorkspaceRoot(workspacePath)
+  const paths = new Set<string>([rootPath])
+
+  try {
+    const [gitDirRaw, commonGitDirRaw] = await Promise.all([
+      runGit(['rev-parse', '--git-dir'], rootPath),
+      runGit(['rev-parse', '--git-common-dir'], rootPath)
+    ])
+
+    paths.add(resolve(rootPath, gitDirRaw))
+    paths.add(resolve(rootPath, commonGitDirRaw))
+  } catch {
+    // Non-git folders still benefit from workspace file watching.
+  }
+
+  return Array.from(paths)
+}
+
+function disposeWorkspaceWatch(watchId: string): void {
+  const registration = workspaceWatchers.get(watchId)
+  if (!registration) {
+    return
+  }
+
+  for (const watcher of registration.watchers) {
+    watcher.close()
+  }
+
+  workspaceWatchers.delete(watchId)
+}
+
+function disposeWorkspaceWatchesForOwner(ownerId: number): void {
+  for (const [watchId, registration] of workspaceWatchers.entries()) {
+    if (registration.ownerId === ownerId) {
+      disposeWorkspaceWatch(watchId)
+    }
+  }
+}
+
+async function startWorkspaceWatch(sender: WebContents, workspacePath: string): Promise<string> {
+  const ownerId = sender.id
+  const rootPath = await resolveWorkspaceRoot(workspacePath)
+  const watchPaths = await resolveGitWatchPaths(rootPath)
+  const watchers: FSWatcher[] = []
+  const watchId = randomUUID()
+
+  const emitChange = (): void => {
+    if (sender.isDestroyed()) {
+      disposeWorkspaceWatchesForOwner(ownerId)
+      return
+    }
+
+    sender.send(harmonyChannels.workspaceDidChange, {
+      watchId,
+      workspacePath: rootPath
+    } satisfies WorkspaceWatchEvent)
+  }
+
+  for (const targetPath of watchPaths) {
+    try {
+      watchers.push(watchFs(targetPath, { recursive: true }, emitChange))
+    } catch {
+      // Ignore paths that cannot be watched on this platform.
+    }
+  }
+
+  if (watchers.length === 0) {
+    throw new Error('Unable to watch workspace changes on this system.')
+  }
+
+  const registration: WorkspaceWatchRegistration = {
+    id: watchId,
+    workspacePath: rootPath,
+    ownerId,
+    sender,
+    watchers
+  }
+
+  workspaceWatchers.set(watchId, registration)
+  sender.once('destroyed', () => {
+    disposeWorkspaceWatchesForOwner(ownerId)
+  })
+
+  return watchId
+}
+
+export function disposeWorkspaceWatches(): void {
+  for (const watchId of Array.from(workspaceWatchers.keys())) {
+    disposeWorkspaceWatch(watchId)
+  }
+}
+
 async function listBranches(workspacePath?: string): Promise<import('../shared/workbench').BranchInfo[]> {
   const repositoryRoot = workspacePath
     ? await getRepositoryRootFromPath(workspacePath)
@@ -514,6 +618,12 @@ export function registerWorktreeIpc(): void {
   ipcMain.handle(harmonyChannels.listWorkspaceChanges, (_event, workspacePath: string) =>
     listWorkspaceChanges(workspacePath)
   )
+  ipcMain.handle(harmonyChannels.watchWorkspaceChangesStart, (event, workspacePath: string) =>
+    startWorkspaceWatch(event.sender, workspacePath)
+  )
+  ipcMain.handle(harmonyChannels.watchWorkspaceChangesStop, (_event, watchId: string) => {
+    disposeWorkspaceWatch(watchId)
+  })
   ipcMain.handle(harmonyChannels.getWorkspace, (_event, workspacePath: string) =>
     getWorkspaceSnapshot(workspacePath)
   )

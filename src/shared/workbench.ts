@@ -63,6 +63,30 @@ export interface CodexQuota {
   additionalLimits: CodexQuotaLimit[]
 }
 
+export type AppUpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+  | 'unsupported'
+
+export interface AppUpdateState {
+  phase: AppUpdatePhase
+  currentVersion: string
+  availableVersion?: string
+  releaseName?: string
+  releaseDate?: string
+  releaseNotes?: string
+  progressPercent?: number
+  downloadedBytes?: number
+  totalBytes?: number
+  message?: string
+  checkedAt?: string
+}
+
 export const harmonyChannels = {
   openFolder: 'dialog:openFolder',
   listAvailableAgents: 'agent:listAvailable',
@@ -71,6 +95,9 @@ export const harmonyChannels = {
   createWorktree: 'worktree:create',
   removeWorktree: 'worktree:remove',
   listWorkspaceChanges: 'workspace:changes',
+  watchWorkspaceChangesStart: 'workspace:watch:start',
+  watchWorkspaceChangesStop: 'workspace:watch:stop',
+  workspaceDidChange: 'workspace:didChange',
   getContextInfo: 'context:get',
   getWorkspace: 'workspace:get',
   readFile: 'file:read',
@@ -83,6 +110,7 @@ export const harmonyChannels = {
   writeTerminal: 'terminal:write',
   resizeTerminal: 'terminal:resize',
   destroyTerminal: 'terminal:destroy',
+  destroyPersistentTerminal: 'terminal:destroyPersistent',
   startAgent: 'agent:start',
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
@@ -90,7 +118,12 @@ export const harmonyChannels = {
   listSessionStats: 'context:sessions',
   getUsageSummary: 'usage:summary',
   getCodexQuota: 'codex:quota',
-  openExternalUrl: 'shell:openExternalUrl'
+  openExternalUrl: 'shell:openExternalUrl',
+  getUpdateState: 'app:update:getState',
+  checkForUpdates: 'app:update:check',
+  downloadUpdate: 'app:update:download',
+  installUpdate: 'app:update:install',
+  updateState: 'app:update:state'
 } as const
 
 export interface WorktreeSummary {
@@ -142,6 +175,11 @@ export interface WorkspaceChangesSnapshot {
   hasRemote: boolean
   publishRemote: string | null
   changes: WorkspaceChange[]
+}
+
+export interface WorkspaceWatchEvent {
+  watchId: string
+  workspacePath: string
 }
 
 export interface SkillSummary {
@@ -222,6 +260,7 @@ export interface GitActionResult {
 export interface CreateTerminalPayload {
   cwd: string
   themeHint?: 'light' | 'dark'
+  persistentId?: string
 }
 
 export interface TerminalSession {
@@ -277,6 +316,10 @@ export interface HarmonyApi {
   createWorktree(payload: WorktreeCreatePayload): Promise<WorktreeSummary>
   removeWorktree(payload: WorktreeRemovePayload): Promise<void>
   listWorkspaceChanges(workspacePath: string): Promise<WorkspaceChangesSnapshot>
+  watchWorkspaceChanges(
+    workspacePath: string,
+    listener: (event: WorkspaceWatchEvent) => void
+  ): Promise<() => Promise<void>>
   getContextInfo(): Promise<ContextInfo>
   getWorkspace(workspacePath: string): Promise<WorkspaceSnapshot>
   readFile(payload: ReadFilePayload): Promise<FileDocument>
@@ -289,6 +332,7 @@ export interface HarmonyApi {
   writeTerminal(sessionId: string, data: string): void
   resizeTerminal(sessionId: string, cols: number, rows: number): void
   destroyTerminal(sessionId: string): void
+  destroyPersistentTerminal(persistentId: string): void
   startAgent(payload: AgentStartPayload): Promise<AgentRun>
   onTerminalData(listener: (event: TerminalDataEvent) => void): () => void
   onTerminalExit(listener: (event: TerminalExitEvent) => void): () => void
@@ -297,4 +341,9 @@ export interface HarmonyApi {
   getUsageSummary(): Promise<AgentUsage[]>
   getCodexQuota(): Promise<CodexQuota | null>
   openExternalUrl(url: string): Promise<void>
+  getUpdateState(): Promise<AppUpdateState>
+  checkForUpdates(): Promise<AppUpdateState>
+  downloadUpdate(): Promise<void>
+  installUpdateAndRestart(): Promise<void>
+  onUpdateState(listener: (event: AppUpdateState) => void): () => void
 }

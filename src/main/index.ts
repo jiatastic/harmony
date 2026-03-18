@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { disposeWorkbench, registerWorkbenchIpc } from './workbench'
+import { initializeUpdater, registerUpdaterIpc } from './updater'
 
 function createWindow(): void {
   // Create the browser window.
@@ -71,8 +72,10 @@ app.whenReady().then(() => {
   })
 
   registerWorkbenchIpc()
+  registerUpdaterIpc()
 
   createWindow()
+  initializeUpdater()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

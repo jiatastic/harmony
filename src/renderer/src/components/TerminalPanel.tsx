@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
@@ -15,6 +15,24 @@ interface TerminalPanelProps {
   workspacePath: string | null
 }
 
+type StoredTerminalTab = {
+  id: string
+  type: 'terminal'
+  workspacePath: string
+  title: string
+}
+
+type StoredBrowserTab = {
+  id: string
+  type: 'browser'
+  workspacePath: string
+  title: string
+  url: string
+  draftUrl: string
+}
+
+type StoredPanelTab = StoredTerminalTab | StoredBrowserTab
+
 type TerminalTab = {
   id: string
   type: 'terminal'
@@ -28,12 +46,108 @@ type TerminalTab = {
 type BrowserTab = {
   id: string
   type: 'browser'
+  workspacePath: string
   title: string
   url: string
   draftUrl: string
 }
 
 type PanelTab = TerminalTab | BrowserTab
+
+const TERMINAL_LAYOUT_KEY = 'harmony-terminal-layout-v1'
+
+function loadTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, string | null> } {
+  try {
+    const raw = localStorage.getItem(TERMINAL_LAYOUT_KEY)
+    if (!raw) {
+      return { tabs: [], activeTabIds: {} }
+    }
+
+    const parsed = JSON.parse(raw) as {
+      tabs?: StoredPanelTab[]
+      activeTabIds?: Record<string, string | null>
+    }
+
+    const tabs: PanelTab[] = []
+    if (Array.isArray(parsed.tabs)) {
+      for (const tab of parsed.tabs) {
+        if (
+          !tab ||
+          typeof tab.id !== 'string' ||
+          typeof tab.workspacePath !== 'string' ||
+          typeof tab.title !== 'string'
+        ) {
+          continue
+        }
+
+        if (tab.type === 'terminal') {
+          tabs.push({ id: tab.id, type: 'terminal', workspacePath: tab.workspacePath, title: tab.title })
+          continue
+        }
+
+        if (
+          tab.type === 'browser' &&
+          typeof tab.url === 'string' &&
+          typeof tab.draftUrl === 'string'
+        ) {
+          tabs.push({
+            id: tab.id,
+            type: 'browser',
+            workspacePath: tab.workspacePath,
+            title: tab.title,
+            url: tab.url,
+            draftUrl: tab.draftUrl
+          })
+        }
+      }
+    }
+
+    const activeTabIds =
+      parsed.activeTabIds && typeof parsed.activeTabIds === 'object'
+        ? Object.fromEntries(
+            Object.entries(parsed.activeTabIds).filter(
+              ([key, value]) => typeof key === 'string' && (typeof value === 'string' || value === null)
+            )
+          )
+        : {}
+
+    return { tabs, activeTabIds }
+  } catch {
+    return { tabs: [], activeTabIds: {} }
+  }
+}
+
+function saveTerminalLayout(tabs: PanelTab[], activeTabIds: Record<string, string | null>): void {
+  try {
+    const serializableTabs: StoredPanelTab[] = tabs.map((tab) =>
+      tab.type === 'terminal'
+        ? {
+            id: tab.id,
+            type: 'terminal',
+            workspacePath: tab.workspacePath,
+            title: tab.title
+          }
+        : {
+            id: tab.id,
+            type: 'browser',
+            workspacePath: tab.workspacePath,
+            title: tab.title,
+            url: tab.url,
+            draftUrl: tab.draftUrl
+          }
+    )
+
+    localStorage.setItem(
+      TERMINAL_LAYOUT_KEY,
+      JSON.stringify({
+        tabs: serializableTabs,
+        activeTabIds
+      })
+    )
+  } catch {
+    /* ignore */
+  }
+}
 
 const XTERM_LIGHT: ITheme = {
   background: '#ffffff',
@@ -321,6 +435,7 @@ function AgentIcon({ id }: { id: string }): React.JSX.Element {
 }
 
 interface TerminalHostProps {
+  tabId: string
   workspacePath: string
   visible: boolean
   agent?: AvailableAgent
@@ -328,6 +443,7 @@ interface TerminalHostProps {
 }
 
 function TerminalHost({
+  tabId,
   workspacePath,
   visible,
   agent,
@@ -364,7 +480,7 @@ function TerminalHost({
       cursorInactiveStyle: 'outline',
       fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
       fontSize: 13,
-      fontWeight: '500',
+      fontWeight: '600',
       lineHeight: 1.4,
       scrollback: 5000,
       theme: isDarkMode() ? XTERM_DARK : XTERM_LIGHT
@@ -416,7 +532,8 @@ function TerminalHost({
     void window.api
       .createTerminal({
         cwd: workspacePath,
-        themeHint: isDarkMode() ? 'dark' : 'light'
+        themeHint: isDarkMode() ? 'dark' : 'light',
+        persistentId: tabId
       })
       .then((session) => {
         if (cancelled) {
@@ -478,7 +595,7 @@ function TerminalHost({
       xtermRef.current = null
       term.dispose()
     }
-  }, [agent?.command, agent?.name, workspacePath])
+  }, [agent?.command, agent?.name, tabId, workspacePath])
 
   useEffect(() => {
     if (visible) {
@@ -493,14 +610,46 @@ function TerminalHost({
 }
 
 export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.Element {
-  const [tabs, setTabs] = useState<PanelTab[]>(() =>
-    workspacePath ? [{ id: uuid(), type: 'terminal', workspacePath, title: leaf(workspacePath) }] : []
+  const [tabs, setTabs] = useState<PanelTab[]>(() => loadTerminalLayout().tabs)
+  const [activeTabIds, setActiveTabIds] = useState<Record<string, string | null>>(
+    () => loadTerminalLayout().activeTabIds
   )
-  const [activeTabId, setActiveTabId] = useState<string | null>(null)
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
+  const initializedWorkspacesRef = useRef(new Set(tabs.map((tab) => tab.workspacePath)))
 
-  const activeId = activeTabId ?? tabs[0]?.id ?? null
-  const firstTerminalWorkspace = tabs.find((tab) => tab.type === 'terminal')?.workspacePath ?? ''
+  const currentWorkspaceTabs = useMemo(
+    () => (workspacePath ? tabs.filter((tab) => tab.workspacePath === workspacePath) : []),
+    [tabs, workspacePath]
+  )
+  const activeId =
+    workspacePath ? (activeTabIds[workspacePath] ?? currentWorkspaceTabs[0]?.id ?? null) : null
+  const firstTerminalWorkspace =
+    currentWorkspaceTabs.find((tab) => tab.type === 'terminal')?.workspacePath ?? ''
+
+  useEffect(() => {
+    if (!workspacePath || initializedWorkspacesRef.current.has(workspacePath)) {
+      return
+    }
+
+    initializedWorkspacesRef.current.add(workspacePath)
+    const id = uuid()
+    setTabs((prev) => [...prev, { id, type: 'terminal', workspacePath, title: leaf(workspacePath) }])
+    setActiveTabIds((prev) => ({ ...prev, [workspacePath]: id }))
+  }, [workspacePath])
+
+  useEffect(() => {
+    if (!workspacePath || currentWorkspaceTabs.length === 0) {
+      return
+    }
+
+    if (!activeId || !currentWorkspaceTabs.some((tab) => tab.id === activeId)) {
+      setActiveTabIds((prev) => ({ ...prev, [workspacePath]: currentWorkspaceTabs[0]?.id ?? null }))
+    }
+  }, [activeId, currentWorkspaceTabs, workspacePath])
+
+  useEffect(() => {
+    saveTerminalLayout(tabs, activeTabIds)
+  }, [activeTabIds, tabs])
 
   const bindSession = useCallback((tabId: string, sessionId: string | null): void => {
     setTabs((prev) =>
@@ -517,10 +666,11 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
     if (!cwd) return
     const id = uuid()
     setTabs((prev) => [...prev, { id, type: 'terminal', workspacePath: cwd, title: leaf(cwd) }])
-    setActiveTabId(id)
+    setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
   }, [firstTerminalWorkspace, workspacePath])
 
   const addBrowserTab = useCallback(() => {
+    if (!workspacePath) return
     const id = uuid()
     const url = 'https://example.com'
     setTabs((prev) => [
@@ -528,13 +678,14 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
       {
         id,
         type: 'browser',
+        workspacePath,
         title: titleFromUrl(url),
         url,
         draftUrl: url
       }
     ])
-    setActiveTabId(id)
-  }, [])
+    setActiveTabIds((prev) => ({ ...prev, [workspacePath]: id }))
+  }, [workspacePath])
 
   const launchAgent = useCallback(
     (agent: AvailableAgent) => {
@@ -551,7 +702,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
           agent
         }
       ])
-      setActiveTabId(id)
+      setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
     },
     [firstTerminalWorkspace, workspacePath]
   )
@@ -559,18 +710,31 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
   const closeTab = useCallback(
     (id: string): void => {
       setTabs((prev) => {
-        const next = prev.filter((t) => t.id !== id)
-        if (activeTabId === id && next.length > 0) {
-          const idx = prev.findIndex((t) => t.id === id)
-          const newActive = next[Math.max(0, idx - 1)]?.id ?? next[0].id
-          setActiveTabId(newActive)
-        } else if (next.length === 0) {
-          setActiveTabId(null)
+        const closing = prev.find((t) => t.id === id)
+        if (!closing) {
+          return prev
         }
+
+        if (closing.type === 'terminal') {
+          window.api.destroyPersistentTerminal(closing.id)
+        }
+
+        const next = prev.filter((t) => t.id !== id)
+        const prevWorkspaceTabs = prev.filter((t) => t.workspacePath === closing.workspacePath)
+        const nextWorkspaceTabs = next.filter((t) => t.workspacePath === closing.workspacePath)
+        const idx = prevWorkspaceTabs.findIndex((t) => t.id === id)
+        const fallbackActive =
+          nextWorkspaceTabs[Math.max(0, idx - 1)]?.id ?? nextWorkspaceTabs[0]?.id ?? null
+
+        setActiveTabIds((activePrev) =>
+          activePrev[closing.workspacePath] === id
+            ? { ...activePrev, [closing.workspacePath]: fallbackActive }
+            : activePrev
+        )
         return next
       })
     },
-    [activeTabId]
+    []
   )
 
   useEffect(() => {
@@ -618,7 +782,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
     )
   }, [])
 
-  if (tabs.length === 0) {
+  if (!workspacePath) {
     return (
       <div className="terminal-wrapper">
         <div className="terminal-empty">
@@ -631,7 +795,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
   return (
     <div className="terminal-wrapper">
       <div className="terminal-tabs">
-        {tabs.map((tab) => (
+        {currentWorkspaceTabs.map((tab) => (
           <div
             key={tab.id}
             className={`terminal-tab${activeId === tab.id ? ' is-active' : ''}`}
@@ -647,7 +811,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
             <button
               type="button"
               className="terminal-tab-label"
-              onClick={() => setActiveTabId(tab.id)}
+              onClick={() => setActiveTabIds((prev) => ({ ...prev, [tab.workspacePath]: tab.id }))}
             >
               {tab.title}
             </button>
@@ -669,7 +833,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
           className="terminal-tab-add"
           aria-label="New terminal"
           onClick={addTab}
-          disabled={!workspacePath && tabs.length === 0}
+          disabled={!workspacePath}
         >
           +
         </button>
@@ -679,6 +843,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
           aria-label="New browser tab"
           onClick={addBrowserTab}
           title="New browser tab"
+          disabled={!workspacePath}
         >
           Web
         </button>
@@ -696,12 +861,11 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
                 type="button"
                 className="agent-launcher"
                 onClick={() => launchAgent(agent)}
-                disabled={!workspacePath && tabs.length === 0}
+                disabled={!workspacePath}
               >
                 <AgentIcon id={agent.id} />
                 <span className="agent-launcher-copy">
                   <span className="agent-launcher-name">{agent.name}</span>
-                  <span className="agent-launcher-command">{agent.command}</span>
                 </span>
               </button>
             ))}
@@ -714,8 +878,9 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
           tab.type === 'terminal' ? (
             <TerminalHost
               key={tab.id}
+              tabId={tab.id}
               workspacePath={tab.workspacePath}
-              visible={tab.id === activeId}
+              visible={tab.workspacePath === workspacePath && tab.id === activeId}
               agent={tab.agent}
               onSessionChange={(sessionId) => bindSession(tab.id, sessionId)}
             />
@@ -723,13 +888,19 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
             <BrowserPane
               key={tab.id}
               tab={tab}
-              visible={tab.id === activeId}
+              visible={tab.workspacePath === workspacePath && tab.id === activeId}
               onDraftChange={updateBrowserDraft}
               onNavigate={navigateBrowserTab}
             />
           )
         ))}
       </div>
+
+      {currentWorkspaceTabs.length === 0 && (
+        <div className="terminal-empty">
+          <p>No terminal. Open a tab to start in this workspace.</p>
+        </div>
+      )}
 
     </div>
   )

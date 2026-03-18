@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { spawn as spawnChild } from 'node:child_process'
 import { basename, resolve } from 'node:path'
 import process from 'node:process'
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
@@ -30,6 +31,28 @@ export type TerminalExitDispatch = {
 const terminalSessions = new Map<string, TerminalRecord>()
 const terminalDataListeners = new Set<(payload: TerminalDataDispatch) => void>()
 const terminalExitListeners = new Set<(payload: TerminalExitDispatch) => void>()
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function getPersistentSessionName(persistentId: string): string {
+  const normalized = persistentId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)
+  return `harmony-${normalized || 'session'}`
+}
+
+function destroyPersistentSession(persistentId: string): void {
+  if (process.platform === 'win32') {
+    return
+  }
+
+  const shell = process.env.SHELL || '/bin/zsh'
+  const sessionName = getPersistentSessionName(persistentId)
+  const child = spawnChild(shell, ['-lc', `tmux kill-session -t ${shellQuote(sessionName)} >/dev/null 2>&1 || true`], {
+    stdio: 'ignore'
+  })
+  child.unref()
+}
 
 function getShellLaunch(): { shell: string; args: string[] } {
   if (process.platform === 'win32') {
@@ -86,7 +109,15 @@ async function createTerminalSession(
 
   const { shell, args } = getShellLaunch()
   const sessionId = randomUUID()
-  const terminal = spawn(shell, args, {
+  const spawnArgs =
+    payload.persistentId && process.platform !== 'win32'
+      ? [
+          '-lc',
+          `if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s ${shellQuote(getPersistentSessionName(payload.persistentId))} -c ${shellQuote(cwd)}; else exec ${shellQuote(shell)} -l; fi`
+        ]
+      : args
+
+  const terminal = spawn(shell, spawnArgs, {
     name: 'xterm-256color',
     cols: 120,
     rows: 32,
@@ -168,6 +199,17 @@ function handleTerminalDestroy(event: IpcMainEvent, payload: { sessionId: string
   destroyTerminalForOwner(event.sender.id, payload.sessionId)
 }
 
+function handlePersistentTerminalDestroy(
+  _event: IpcMainEvent,
+  payload: { persistentId: string }
+): void {
+  if (!payload.persistentId?.trim()) {
+    return
+  }
+
+  destroyPersistentSession(payload.persistentId)
+}
+
 export function onTerminalData(listener: (payload: TerminalDataDispatch) => void): () => void {
   terminalDataListeners.add(listener)
 
@@ -218,6 +260,7 @@ export function registerTerminalIpc(): void {
   ipcMain.on(harmonyChannels.writeTerminal, handleTerminalWrite)
   ipcMain.on(harmonyChannels.resizeTerminal, handleTerminalResize)
   ipcMain.on(harmonyChannels.destroyTerminal, handleTerminalDestroy)
+  ipcMain.on(harmonyChannels.destroyPersistentTerminal, handlePersistentTerminalDestroy)
 }
 
 export function disposeTerminalSessions(): void {

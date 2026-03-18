@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
+  AppUpdateState,
   AgentRun,
   AgentStartPayload,
   CreateTerminalPayload,
@@ -9,6 +10,7 @@ import type {
   SaveFilePayload,
   TerminalDataEvent,
   TerminalExitEvent,
+  WorkspaceWatchEvent,
   WorktreeCreatePayload,
   WorktreeRemovePayload
 } from '../shared/workbench'
@@ -39,11 +41,32 @@ const api: HarmonyApi = {
     ipcRenderer.invoke(harmonyChannels.removeWorktree, payload),
   listWorkspaceChanges: (workspacePath: string) =>
     ipcRenderer.invoke(harmonyChannels.listWorkspaceChanges, workspacePath),
+  watchWorkspaceChanges: async (workspacePath: string, listener: (event: WorkspaceWatchEvent) => void) => {
+    const watchId = (await ipcRenderer.invoke(
+      harmonyChannels.watchWorkspaceChangesStart,
+      workspacePath
+    )) as string
+
+    const subscription = (_event: Electron.IpcRendererEvent, payload: WorkspaceWatchEvent): void => {
+      if (payload.watchId === watchId) {
+        listener(payload)
+      }
+    }
+
+    ipcRenderer.on(harmonyChannels.workspaceDidChange, subscription)
+
+    return async (): Promise<void> => {
+      ipcRenderer.removeListener(harmonyChannels.workspaceDidChange, subscription)
+      await ipcRenderer.invoke(harmonyChannels.watchWorkspaceChangesStop, watchId)
+    }
+  },
   getContextInfo: () => ipcRenderer.invoke(harmonyChannels.getContextInfo),
   createTerminal: (payload: CreateTerminalPayload) =>
     ipcRenderer.invoke(harmonyChannels.createTerminal, payload),
   destroyTerminal: (sessionId: string) =>
     ipcRenderer.send(harmonyChannels.destroyTerminal, { sessionId }),
+  destroyPersistentTerminal: (persistentId: string) =>
+    ipcRenderer.send(harmonyChannels.destroyPersistentTerminal, { persistentId }),
   getWorkspace: (workspacePath: string) =>
     ipcRenderer.invoke(harmonyChannels.getWorkspace, workspacePath),
   onTerminalData: (listener) =>
@@ -70,7 +93,12 @@ const api: HarmonyApi = {
     ipcRenderer.invoke(harmonyChannels.listSessionStats, workspacePath),
   getUsageSummary: () => ipcRenderer.invoke(harmonyChannels.getUsageSummary),
   getCodexQuota: () => ipcRenderer.invoke(harmonyChannels.getCodexQuota),
-  openExternalUrl: (url: string) => ipcRenderer.invoke(harmonyChannels.openExternalUrl, url)
+  openExternalUrl: (url: string) => ipcRenderer.invoke(harmonyChannels.openExternalUrl, url),
+  getUpdateState: () => ipcRenderer.invoke(harmonyChannels.getUpdateState),
+  checkForUpdates: () => ipcRenderer.invoke(harmonyChannels.checkForUpdates),
+  downloadUpdate: () => ipcRenderer.invoke(harmonyChannels.downloadUpdate),
+  installUpdateAndRestart: () => ipcRenderer.invoke(harmonyChannels.installUpdate),
+  onUpdateState: (listener) => subscribeToChannel<AppUpdateState>(harmonyChannels.updateState, listener)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

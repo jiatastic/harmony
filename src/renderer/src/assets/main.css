@@ -225,6 +225,55 @@ button {
   -webkit-app-region: no-drag;
 }
 
+.titlebar-update-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background 100ms ease, border-color 100ms ease, opacity 100ms ease, color 100ms ease;
+}
+
+.titlebar-update-btn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.titlebar-update-btn:disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.titlebar-update-btn.is-available {
+  color: oklch(0.62 0.18 142);
+  border-color: oklch(0.62 0.18 142 / 0.22);
+  background: oklch(0.62 0.18 142 / 0.12);
+}
+
+.titlebar-update-btn.is-downloaded {
+  color: oklch(0.73 0.16 85);
+  border-color: oklch(0.73 0.16 85 / 0.26);
+  background: oklch(0.73 0.16 85 / 0.14);
+}
+
+.titlebar-update-btn.is-error {
+  color: oklch(0.64 0.21 25);
+  border-color: oklch(0.64 0.21 25 / 0.24);
+  background: oklch(0.64 0.21 25 / 0.12);
+}
+
+.titlebar-update-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .titlebar-btn {
   position: relative;
   display: inline-flex;
