@@ -1,31 +1,48 @@
+<div align="center">
+
 # Harmony
 
-Harmony is a desktop workspace for coding with multiple terminal-based agents, Git worktrees, and local repositories in one place.
+### A desktop workspace for running CLI coding agents across terminals, repos, and worktrees
 
-It is designed for people who want the speed of CLI agents without losing visibility over branches, diffs, terminals, and repository context.
+[Download v0.0.1](https://github.com/jiatastic/harmony/releases/tag/v0.0.1) · [GitHub](https://github.com/jiatastic/harmony)
+
+</div>
+
+Harmony is an Electron app for people who like terminal-based coding agents, but do not want to manage everything through scattered shells and branches.
+
+It brings your local terminals, Git worktrees, repository state, and agent sessions into one desktop workspace.
 
 ## Why Harmony
 
-- Run multiple agent sessions side by side
-- Keep work isolated with Git worktrees
-- See repository changes without leaving the app
-- Switch between raw terminals and source control quickly
-- Build on a monorepo foundation that can grow into desktop + web
+Most CLI agents are fast, but the workflow around them gets messy fast:
 
-## What You Can Do
+- too many terminals
+- too many branches
+- no clean overview of what each agent changed
+- too much context switching between terminal, Git, and filesystem
 
-| Feature | What it gives you |
+Harmony is built to solve that layer around the agent.
+
+## What Harmony Does
+
+| Area | What you get |
 | --- | --- |
-| Multi-workspace view | Open repositories and folders in one desktop app |
-| Built-in terminals | Run shell sessions directly inside each workspace |
-| Agent launchers | Start CLI agents such as Codex, Claude Code, Cursor, Gemini, and OpenCode |
-| Worktree management | Create and manage isolated branches for parallel work |
-| Source control panel | Stage, commit, and publish changes from the UI |
-| Context inspection | Inspect skills, MCP servers, session stats, and usage |
+| Terminals | Run raw terminal sessions directly inside each workspace |
+| Agents | Launch CLI agents like Codex, Claude Code, Cursor, Gemini, and OpenCode |
+| Worktrees | Create isolated Git worktrees for parallel tasks |
+| Source Control | Review changes, generate commit messages, commit, and publish |
+| Workspace View | Keep multiple repos and folders open in one desktop app |
+| Context | Inspect skills, MCP servers, usage, and session metadata |
+
+## Current Product Shape
+
+Harmony is currently focused on the desktop app.
+
+- The primary agent experience is the raw terminal
+- The repository already uses a monorepo layout
+- A future website can live in the same repo without another migration
 
 ## Repository Structure
-
-Harmony now uses a monorepo layout so the desktop app and future website can evolve together.
 
 ```text
 apps/
@@ -33,43 +50,33 @@ apps/
   web/       Future website
 ```
 
-Today, the desktop app is the main product. The `web` workspace is intentionally lightweight and ready for the next phase.
+## Getting Started
 
-## Quick Start
-
-### Install dependencies
+### Install
 
 ```bash
 npm install
 ```
 
-### Run the desktop app in development
+### Run locally
 
 ```bash
 npm run dev
 ```
 
-### Type-check the desktop app
+### Type-check
 
 ```bash
 npm run typecheck
 ```
 
-## Build
-
-### Build the desktop app
+### Build
 
 ```bash
 npm run build
 ```
 
-### Build macOS locally without signing
-
-```bash
-npm run build:mac:unsigned
-```
-
-### Platform builds
+## Platform Builds
 
 ```bash
 npm run build:mac
@@ -77,18 +84,22 @@ npm run build:win
 npm run build:linux
 ```
 
-Desktop release artifacts are generated from `apps/desktop`.
+For local macOS smoke tests without signing:
 
-## Release Notes
+```bash
+npm run build:mac:unsigned
+```
 
-GitHub Releases are published from version tags:
+## Release Flow
+
+Harmony releases are published from Git tags.
 
 ```bash
 git tag v0.0.1
 git push origin v0.0.1
 ```
 
-The release workflow installs dependencies at the monorepo root and builds the desktop app from `apps/desktop`.
+The GitHub release workflow installs dependencies from the monorepo root and builds the desktop app from `apps/desktop`.
 
 ## Tech Stack
 
@@ -101,12 +112,12 @@ The release workflow installs dependencies at the monorepo root and builds the d
 
 ## Roadmap
 
-- Polish the desktop UX for agent-heavy workflows
-- Add a proper website in `apps/web`
-- Extract shared modules when desktop and web start overlapping
-- Expand release automation and onboarding docs
+- Make the desktop UX feel great for agent-heavy workflows
+- Add a proper web experience in `apps/web`
+- Extract shared modules once desktop and web begin overlapping
+- Improve onboarding, docs, and release automation
 
-## macOS Signing and Notarization
+## macOS Signing
 
 Public macOS releases should be signed and notarized.
 

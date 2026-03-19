@@ -45,3 +45,8 @@ linux:
 appImage:
   artifactName: ${productName}-${version}-${arch}.${ext}
 npmRebuild: false
+publish:
+  - provider: github
+    owner: jiatastic
+    repo: harmony
+    releaseType: release

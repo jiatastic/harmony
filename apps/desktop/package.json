@@ -6,6 +6,10 @@
   "main": "./out/main/index.js",
   "author": "Haoxiang Jia",
   "homepage": "https://jiatastic.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jiatastic/harmony.git"
+  },
   "scripts": {
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
