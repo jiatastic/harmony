@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react'
 import { flushSync } from 'react-dom'
 import { FileTree } from './components/FileTree'
-import { TerminalPanel } from './components/TerminalPanel'
+import { TerminalPanel, type OpenTerminalTabSummary } from './components/TerminalPanel'
 import { WorktreePanel, type WorkspaceItem } from './components/WorktreePanel'
 import type {
   AppUpdateState,
   AgentUsage,
+  BranchInfo,
+  ClaudeQuota,
   CodexQuota,
   ContextInfo,
+  GitAvailability,
   SessionStat,
+  SkillMarketplaceItem,
   WorkspaceChangesSnapshot,
   WorkspaceEntry,
   WorkspaceSnapshot,
@@ -122,6 +126,16 @@ function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
+}
+
+function fmtInstalls(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function shouldConfirmRisk(risk: string): boolean {
+  return risk === 'medium' || risk === 'high' || risk === 'critical' || risk === 'unknown'
 }
 
 function fmtResetIn(unixSec: number): string {
@@ -314,6 +328,57 @@ function CodexQuotaCard({ quota }: { quota: CodexQuota }): React.JSX.Element {
   )
 }
 
+function ClaudeWindowSummary({
+  label,
+  window
+}: {
+  label: string
+  window: ClaudeQuota['rolling5h']
+}): React.JSX.Element {
+  const totalTokens = window.totalInputTokens + window.totalOutputTokens + window.totalCacheTokens
+
+  return (
+    <div className="quota-meter">
+      <div className="quota-meter-header">
+        <span className="quota-meter-label">{label}</span>
+        <span className="quota-meter-right">
+          <span className="quota-meter-pct">{window.sessionCount} sessions</span>
+        </span>
+      </div>
+      <div className="quota-meter-sub">
+        {fmtTokens(totalTokens)} tokens
+        {window.totalCostUSD != null ? ` • $${window.totalCostUSD.toFixed(2)}` : ''}
+      </div>
+    </div>
+  )
+}
+
+function ClaudeQuotaCard({ quota }: { quota: ClaudeQuota }): React.JSX.Element {
+  return (
+    <div className="quota-card">
+      <div className="quota-card-header">
+        <span className="quota-card-dot" style={{ background: AGENT_COLORS.claude }} aria-hidden="true" />
+        <span className="quota-card-title">Claude Code</span>
+        <span className="quota-card-plan">LOCAL ESTIMATE</span>
+      </div>
+
+      <div className="quota-subscription-row">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M8 4.8v3.4l2.3 1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="quota-subscription-date">{quota.note}</span>
+      </div>
+
+      <div className="quota-meters">
+        <ClaudeWindowSummary label="Recent 5h" window={quota.rolling5h} />
+        <ClaudeWindowSummary label="Recent 7d" window={quota.rolling7d} />
+        <ClaudeWindowSummary label="Recent 30d" window={quota.rolling30d} />
+      </div>
+    </div>
+  )
+}
+
 function statusToClass(s: string): string {
   const map: Record<string, string> = {
     '?': 'untracked',
@@ -384,6 +449,7 @@ const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 480
 const DEFAULT_LEFT = 260
 const DEFAULT_RIGHT = 320
+const SIDEBAR_COLLAPSE_KEY = 'harmony-sidebar-collapsed'
 
 function loadSidebarWidths(): [number, number] {
   try {
@@ -411,7 +477,38 @@ function saveSidebarWidths(left: number, right: number): void {
   }
 }
 
+function loadCollapsedSidebars(): { left: boolean; right: boolean } {
+  try {
+    const s = localStorage.getItem(SIDEBAR_COLLAPSE_KEY)
+    if (s) {
+      const parsed = JSON.parse(s) as unknown
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'left' in parsed &&
+        'right' in parsed &&
+        typeof parsed.left === 'boolean' &&
+        typeof parsed.right === 'boolean'
+      ) {
+        return { left: parsed.left, right: parsed.right }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { left: false, right: false }
+}
+
+function saveCollapsedSidebars(left: boolean, right: boolean): void {
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSE_KEY, JSON.stringify({ left, right }))
+  } catch {
+    /* ignore */
+  }
+}
+
 const OPENED_FOLDERS_KEY = 'harmony-opened-folders'
+const HIDDEN_WORKTREES_KEY = 'harmony-hidden-worktrees'
 
 function loadOpenedFolders(): string[] {
   try {
@@ -431,6 +528,29 @@ function loadOpenedFolders(): string[] {
 function saveOpenedFolders(folders: string[]): void {
   try {
     localStorage.setItem(OPENED_FOLDERS_KEY, JSON.stringify(folders))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadHiddenWorktrees(): string[] {
+  try {
+    const s = localStorage.getItem(HIDDEN_WORKTREES_KEY)
+    if (s) {
+      const parsed = JSON.parse(s) as unknown
+      if (Array.isArray(parsed) && parsed.every((p) => typeof p === 'string')) {
+        return parsed
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+function saveHiddenWorktrees(worktrees: string[]): void {
+  try {
+    localStorage.setItem(HIDDEN_WORKTREES_KEY, JSON.stringify(worktrees))
   } catch {
     /* ignore */
   }
@@ -496,6 +616,7 @@ const SOURCE_COLORS: Record<string, string> = {
   cursor:  '#111111',
   agents:  '#6366f1',
   codex:   '#10a37f',
+  opencode: '#2563eb',
   claude:  '#d4832a',
   gemini:  '#4285f4',
   openai:  '#10a37f',
@@ -505,6 +626,7 @@ const SOURCE_LABELS: Record<string, string> = {
   agents:  'Agent Skills',
   cursor:  'Cursor Skills',
   codex:   'Codex Skills',
+  opencode: 'OpenCode Skills',
   claude:  'Claude Skills',
   gemini:  'Gemini Skills',
   openai:  'OpenAI Skills',
@@ -516,6 +638,32 @@ function sourceColor(src: string): string {
 
 function sourceLabel(src: string): string {
   return SOURCE_LABELS[src.toLowerCase()] ?? src.charAt(0).toUpperCase() + src.slice(1)
+}
+
+function mcpStatusClass(status: import('../../shared/workbench').McpServerSummary['status']): string {
+  switch (status) {
+    case 'connected':
+      return 'is-connected'
+    case 'disconnected':
+      return 'is-disconnected'
+    case 'error':
+      return 'is-error'
+    default:
+      return ''
+  }
+}
+
+function mcpStatusLabel(status: import('../../shared/workbench').McpServerSummary['status']): string {
+  switch (status) {
+    case 'connected':
+      return 'connected'
+    case 'disconnected':
+      return 'disconnected'
+    case 'error':
+      return 'error'
+    default:
+      return status
+  }
 }
 
 function AccordItemGlyph({
@@ -598,11 +746,16 @@ function AccordionSection({
 }
 
 function App(): React.JSX.Element {
+  const platform = window.electron.process.platform
+  const isMac = platform === 'darwin'
   const [theme, setTheme] = useTheme()
   const [[leftWidth, rightWidth], setSidebarWidths] = useState(loadSidebarWidths)
+  const [{ left: isLeftCollapsed, right: isRightCollapsed }, setCollapsedSidebars] =
+    useState(loadCollapsedSidebars)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth <= 860)
   const [worktrees, setWorktrees] = useState<WorktreeSummary[]>([])
   const [openedFolders, setOpenedFolders] = useState<string[]>(loadOpenedFolders)
+  const [hiddenWorktrees, setHiddenWorktrees] = useState<string[]>(loadHiddenWorktrees)
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 860px)')
@@ -669,19 +822,37 @@ function App(): React.JSX.Element {
   const [status, setStatus] = useState('Loading\u2026')
   const [rightTab, setRightTab] = useState<RightTab>('changes')
   const [commitMsg, setCommitMsg] = useState('')
-  const [openAccordions, setOpenAccordions] = useState<Set<string>>(() => new Set(['subagents', 'mcp']))
+  const [openAccordions, setOpenAccordions] = useState<Set<string>>(() =>
+    new Set(['subagents', 'skill-store', 'mcp'])
+  )
   const [workspaceChanges, setWorkspaceChanges] =
     useState<WorkspaceChangesSnapshot>(EMPTY_WORKSPACE_CHANGES)
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null)
+  const [marketplaceQuery, setMarketplaceQuery] = useState('')
+  const [marketplaceResults, setMarketplaceResults] = useState<SkillMarketplaceItem[]>([])
+  const [marketplaceError, setMarketplaceError] = useState<string | null>(null)
+  const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false)
+  const [installingSkillId, setInstallingSkillId] = useState<string | null>(null)
+  const [gitAvailability, setGitAvailability] = useState<GitAvailability | null>(null)
   const [sessionStats, setSessionStats] = useState<SessionStat[]>([])
   const [usageData, setUsageData] = useState<AgentUsage[]>([])
   const [codexQuota, setCodexQuota] = useState<CodexQuota | null>(null)
+  const [claudeQuota, setClaudeQuota] = useState<ClaudeQuota | null>(null)
   const [updateState, setUpdateState] = useState<AppUpdateState>(EMPTY_UPDATE_STATE)
   const [isGeneratingCommitMsg, setIsGeneratingCommitMsg] = useState(false)
   const [isStagingChanges, setIsStagingChanges] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
   const [isPublishing, setIsPublishing] = useState(false)
+  const [isGitActionPending, setIsGitActionPending] = useState(false)
+  const [openTerminalTabs, setOpenTerminalTabs] = useState<OpenTerminalTabSummary[]>([])
+  const [requestedActiveTerminalTab, setRequestedActiveTerminalTab] = useState<{
+    workspacePath: string
+    tabId: string
+    nonce: number
+  } | null>(null)
   const wtRef = useRef<string | null>(null)
+  const marketplaceSearchTimerRef = useRef<number | null>(null)
+  const marketplaceSearchRequestRef = useRef(0)
 
   useEffect(() => {
     wtRef.current = selectedWt
@@ -691,7 +862,34 @@ function App(): React.JSX.Element {
     saveOpenedFolders(openedFolders)
   }, [openedFolders])
 
+  useEffect(() => {
+    saveHiddenWorktrees(hiddenWorktrees)
+  }, [hiddenWorktrees])
+
+  useEffect(() => {
+    saveCollapsedSidebars(isLeftCollapsed, isRightCollapsed)
+  }, [isLeftCollapsed, isRightCollapsed])
+
   const activeChanges = selectedWt ? workspaceChanges : EMPTY_WORKSPACE_CHANGES
+
+  useEffect(() => {
+    let cancelled = false
+
+    void window.api.getGitAvailability().then((info) => {
+      if (!cancelled) {
+        setGitAvailability(info)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refreshGitAvailability = useCallback(async (): Promise<void> => {
+    const info = await window.api.getGitAvailability()
+    setGitAvailability(info)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -763,12 +961,15 @@ function App(): React.JSX.Element {
     }
   }, [])
 
-  // Poll Codex quota every 5 min (cached server-side)
+  // Poll subscription/usage cards every 5 min (cached/best-effort server-side)
   useEffect(() => {
     let cancelled = false
     const fetchQuota = (): void => {
-      void window.api.getCodexQuota().then((q) => {
-        if (!cancelled) setCodexQuota(q)
+      void Promise.all([window.api.getCodexQuota(), window.api.getClaudeQuota()]).then(([codex, claude]) => {
+        if (!cancelled) {
+          setCodexQuota(codex)
+          setClaudeQuota(claude)
+        }
       })
     }
     fetchQuota()
@@ -870,7 +1071,8 @@ function App(): React.JSX.Element {
 
   const workspaces = useMemo((): WorkspaceItem[] => {
     const wtPaths = new Set(worktrees.map((w) => w.path))
-    const items: WorkspaceItem[] = [...worktrees]
+    const hiddenPaths = new Set(hiddenWorktrees)
+    const items: WorkspaceItem[] = worktrees.filter((w) => !hiddenPaths.has(w.path))
     for (const path of openedFolders) {
       if (wtPaths.has(path)) continue
       items.push({
@@ -886,7 +1088,23 @@ function App(): React.JSX.Element {
       })
     }
     return items
-  }, [worktrees, openedFolders])
+  }, [hiddenWorktrees, worktrees, openedFolders])
+
+  const openedTerminalsByWorkspace = useMemo(() => {
+    const grouped: Record<string, Array<{ id: string; title: string; status?: string; isAgent?: boolean }>> = {}
+    for (const tab of openTerminalTabs) {
+      if (!grouped[tab.workspacePath]) {
+        grouped[tab.workspacePath] = []
+      }
+      grouped[tab.workspacePath].push({
+        id: tab.id,
+        title: tab.title,
+        status: tab.status,
+        isAgent: tab.isAgent
+      })
+    }
+    return grouped
+  }, [openTerminalTabs])
 
   const refresh = useCallback(
     async (preferWt?: string, preferFile?: string) => {
@@ -933,10 +1151,14 @@ function App(): React.JSX.Element {
   }, [loadWorkspace])
 
   const handleCreateWorktree = useCallback(
-    async (branch: string, workspacePath?: string): Promise<void> => {
+    async (branch: BranchInfo, workspacePath?: string): Promise<void> => {
       try {
         const path = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0]
-        const worktree = await window.api.createWorktree({ branch, workspacePath: path })
+        const worktree = await window.api.createWorktree({
+          branch: branch.name,
+          baseRef: branch.remote ? branch.remoteRef : undefined,
+          workspacePath: path
+        })
         await refresh(worktree.path)
         setStatus(`Created ${worktree.name}`)
       } catch (err: unknown) {
@@ -946,6 +1168,21 @@ function App(): React.JSX.Element {
     [refresh, selectedWt, worktrees, openedFolders]
   )
 
+  const handleOpenTerminalTab = useCallback(
+    async (workspacePath: string, tabId: string): Promise<void> => {
+      setRequestedActiveTerminalTab({
+        workspacePath,
+        tabId,
+        nonce: Date.now()
+      })
+
+      if (selectedWt !== workspacePath) {
+        await loadWorkspace(workspacePath)
+      }
+    },
+    [loadWorkspace, selectedWt]
+  )
+
   const handleRefreshChanges = useCallback((): void => {
     if (!selectedWt) {
       return
@@ -953,6 +1190,112 @@ function App(): React.JSX.Element {
 
     void refreshChanges(selectedWt)
   }, [refreshChanges, selectedWt])
+
+  const handleMarketplaceSearch = useCallback(async (queryOverride?: string): Promise<void> => {
+    const query = (queryOverride ?? marketplaceQuery).trim()
+    const requestId = marketplaceSearchRequestRef.current + 1
+    marketplaceSearchRequestRef.current = requestId
+    setMarketplaceError(null)
+
+    if (!query) {
+      setMarketplaceResults([])
+      return
+    }
+
+    try {
+      setIsMarketplaceLoading(true)
+      const result = await window.api.searchSkillsMarketplace({ query, limit: 20 })
+      if (marketplaceSearchRequestRef.current !== requestId) {
+        return
+      }
+      setMarketplaceResults(result.items)
+      setStatus(`Found ${result.items.length} installable skills for "${query}".`)
+    } catch (err: unknown) {
+      if (marketplaceSearchRequestRef.current !== requestId) {
+        return
+      }
+      const message = err instanceof Error ? err.message : 'Failed to search skills.sh'
+      setMarketplaceError(message)
+      setStatus(message)
+    } finally {
+      if (marketplaceSearchRequestRef.current === requestId) {
+        setIsMarketplaceLoading(false)
+      }
+    }
+  }, [marketplaceQuery])
+
+  useEffect(() => {
+    if (marketplaceSearchTimerRef.current !== null) {
+      window.clearTimeout(marketplaceSearchTimerRef.current)
+      marketplaceSearchTimerRef.current = null
+    }
+
+    if (!marketplaceQuery.trim()) {
+      marketplaceSearchRequestRef.current += 1
+      setMarketplaceResults([])
+      setMarketplaceError(null)
+      setIsMarketplaceLoading(false)
+      return
+    }
+
+    marketplaceSearchTimerRef.current = window.setTimeout(() => {
+      void handleMarketplaceSearch(marketplaceQuery)
+    }, 350)
+
+    return () => {
+      if (marketplaceSearchTimerRef.current !== null) {
+        window.clearTimeout(marketplaceSearchTimerRef.current)
+        marketplaceSearchTimerRef.current = null
+      }
+    }
+  }, [handleMarketplaceSearch, marketplaceQuery])
+
+  const handleMarketplaceInstall = useCallback(
+    async (item: SkillMarketplaceItem): Promise<void> => {
+      if (installingSkillId !== null) {
+        return
+      }
+      try {
+        setInstallingSkillId(item.id)
+        setMarketplaceError(null)
+
+        const audit = await window.api.auditSkillFromMarketplace({ source: item.source, skill: item.skillId })
+        const riskLine = `Risk: ${audit.risk.toUpperCase()}`
+        const scoreLine = audit.score === null ? 'Score: n/a' : `Score: ${audit.score}`
+        const alertsLine = audit.alerts === null ? 'Alerts: n/a' : `Alerts: ${audit.alerts}`
+        if (shouldConfirmRisk(audit.risk)) {
+          const proceed = window.confirm(
+            [
+              `Security audit before install (${item.name})`,
+              riskLine,
+              scoreLine,
+              alertsLine,
+              '',
+              'Continue installing this skill?'
+            ].join('\n')
+          )
+          if (!proceed) {
+            setStatus(`Cancelled install for ${item.skillId}.`)
+            return
+          }
+        } else {
+          setStatus(`Audit passed: ${riskLine}. Installing ${item.skillId}...`)
+        }
+
+        const result = await window.api.installSkillFromMarketplace({ source: item.source, skill: item.skillId })
+        setStatus(result.summary)
+        const info = await window.api.getContextInfo()
+        setContextInfo(info)
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Failed to install skill'
+        setMarketplaceError(message)
+        setStatus(message)
+      } finally {
+        setInstallingSkillId(null)
+      }
+    },
+    [installingSkillId]
+  )
 
   const handleGenerateCommitMessage = useCallback(async (): Promise<void> => {
     if (!selectedWt) {
@@ -1061,21 +1404,23 @@ function App(): React.JSX.Element {
         }
         setStatus(`Removed ${name}`)
       } else {
-        try {
-          await window.api.removeWorktree({ path })
+        setHiddenWorktrees((prev) => (prev.includes(path) ? prev : [...prev, path]))
+        if (selectedWt === path) {
           const fallback =
-            selectedWt === path
-              ? (workspaces.find((w) => w.isMain && w.path !== path)?.path ??
-                workspaces.find((w) => w.path !== path)?.path)
-              : (selectedWt ?? undefined)
-          await refresh(fallback)
-          setStatus(`Removed ${name}`)
-        } catch (err: unknown) {
-          setStatus(err instanceof Error ? err.message : 'Remove failed')
+            workspaces.find((w) => w.isMain && w.path !== path)?.path ??
+            workspaces.find((w) => w.path !== path)?.path
+          if (fallback) {
+            await loadWorkspace(fallback)
+          } else {
+            setWorkspace(null)
+            setSelectedWt(null)
+            setSelectedFile(null)
+          }
         }
+        setStatus(`Removed ${name}`)
       }
     },
-    [refresh, selectedWt, workspaces]
+    [loadWorkspace, selectedWt, workspaces]
   )
 
   const wt = useMemo(
@@ -1088,11 +1433,19 @@ function App(): React.JSX.Element {
   const skillsCount = contextInfo?.skills.length ?? 0
   const mcpCount = contextInfo?.mcpServers.length ?? 0
   const changesCount = activeChanges.changes.length
-  const publishLabel = activeChanges.upstream ? 'Push Branch' : 'Publish Branch'
+  const hasUpstream = Boolean(activeChanges.upstream)
+  const needsPush = hasUpstream && activeChanges.ahead > 0
+  const branchActionMode =
+    Boolean(selectedWt) && activeChanges.isGitRepo && activeChanges.hasRemote && Boolean(activeChanges.branch)
+      ? hasUpstream
+        ? (needsPush ? 'push' : null)
+        : 'publish'
+      : null
+  const publishLabel = branchActionMode === 'push' ? 'Push Branch' : 'Publish Branch'
   const publishMeta = !activeChanges.isGitRepo
     ? 'Open a git repository to enable source control.'
     : activeChanges.upstream
-      ? `${activeChanges.upstream}${activeChanges.ahead > 0 ? ` • ahead ${activeChanges.ahead}` : ''}${activeChanges.behind > 0 ? ` • behind ${activeChanges.behind}` : ''}`
+      ? `${activeChanges.upstream}${activeChanges.ahead > 0 ? ` • ahead ${activeChanges.ahead}` : ' • up to date'}${activeChanges.behind > 0 ? ` • behind ${activeChanges.behind}` : ''}`
       : activeChanges.hasRemote
         ? `Ready to publish to ${activeChanges.publishRemote ?? 'origin'}`
         : 'No git remote found.'
@@ -1104,12 +1457,7 @@ function App(): React.JSX.Element {
     changesCount > 0 &&
     commitMsg.trim().length > 0 &&
     !isCommitting
-  const canPublish =
-    Boolean(selectedWt) &&
-    activeChanges.isGitRepo &&
-    activeChanges.hasRemote &&
-    Boolean(activeChanges.branch) &&
-    !isPublishing
+  const canPublish = branchActionMode !== null && !isPublishing
   const groupedChanges = useMemo(
     () => groupChangesByDir(activeChanges.changes),
     [activeChanges.changes]
@@ -1184,21 +1532,99 @@ function App(): React.JSX.Element {
     })
   }, [theme, setTheme])
 
+  const handleInstallGit = useCallback(async (): Promise<void> => {
+    try {
+      setIsGitActionPending(true)
+      const message = await window.api.installGit()
+      setStatus(message)
+      await refreshGitAvailability()
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Failed to start Git installation')
+    } finally {
+      setIsGitActionPending(false)
+    }
+  }, [refreshGitAvailability])
+
+  const handleRetryGit = useCallback(async (): Promise<void> => {
+    try {
+      setIsGitActionPending(true)
+      await refreshGitAvailability()
+      setStatus('Refreshed Git availability.')
+    } catch (err: unknown) {
+      setStatus(err instanceof Error ? err.message : 'Failed to refresh Git availability')
+    } finally {
+      setIsGitActionPending(false)
+    }
+  }, [refreshGitAvailability])
+
+  const toggleLeftSidebar = useCallback((): void => {
+    setCollapsedSidebars((prev) => ({ ...prev, left: !prev.left }))
+  }, [])
+
+  const toggleRightSidebar = useCallback((): void => {
+    setCollapsedSidebars((prev) => ({ ...prev, right: !prev.right }))
+  }, [])
+
+  const layoutStyle = useMemo((): React.CSSProperties | undefined => {
+    if (isNarrow) {
+      const rows: string[] = []
+      if (!isLeftCollapsed) rows.push('200px')
+      rows.push('minmax(0, 1fr)')
+      if (!isRightCollapsed) rows.push('280px')
+      return {
+        gridTemplateColumns: '1fr',
+        gridTemplateRows: rows.join(' ')
+      }
+    }
+
+    const columns: string[] = []
+    if (!isLeftCollapsed) {
+      columns.push(`${leftWidth}px`, '4px')
+    }
+    columns.push('minmax(0, 1fr)')
+    if (!isRightCollapsed) {
+      columns.push('4px', `${rightWidth}px`)
+    }
+    return {
+      gridTemplateColumns: columns.join(' ')
+    }
+  }, [isLeftCollapsed, isNarrow, isRightCollapsed, leftWidth, rightWidth])
+
   return (
-    <div className="shell">
+    <div className={`shell${isMac ? ' is-native-mac' : ''}`}>
       {/* aria-live region for async status announcements */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
         {status}
       </div>
 
-      <header className="titlebar">
-        <div className="titlebar-main">
-          <span className="titlebar-app">Harmony</span>
-          <div className="titlebar-meta">
-            {branch && branch !== '—' && <span className="titlebar-branch-pill">{branch}</span>}
-            {changesCount > 0 && (
-              <span className="titlebar-changes-badge">{changesCount} changes</span>
-            )}
+      <header className={`titlebar${isMac ? ' is-native-mac' : ''}`}>
+        <div className="titlebar-leading">
+          <button
+            className="titlebar-btn"
+            type="button"
+            aria-label={isLeftCollapsed ? 'Expand left sidebar' : 'Collapse left sidebar'}
+            title={isLeftCollapsed ? 'Expand left sidebar' : 'Collapse left sidebar'}
+            onClick={toggleLeftSidebar}
+          >
+            <span className="titlebar-btn-icon">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                {isLeftCollapsed ? (
+                  <path d="M6 3l4 5-4 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                ) : (
+                  <path d="M10 3L6 8l4 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                )}
+                <path d="M3.5 2v12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </span>
+          </button>
+          <div className="titlebar-main">
+            <span className="titlebar-app">Harmony</span>
+            <div className="titlebar-meta">
+              {branch && branch !== '—' && <span className="titlebar-branch-pill">{branch}</span>}
+              {changesCount > 0 && (
+                <span className="titlebar-changes-badge">{changesCount} changes</span>
+              )}
+            </div>
           </div>
         </div>
         <div className="titlebar-actions">
@@ -1232,32 +1658,54 @@ function App(): React.JSX.Element {
               </svg>
             </span>
           </button>
+          <button
+            className="titlebar-btn"
+            type="button"
+            aria-label={isRightCollapsed ? 'Expand right sidebar' : 'Collapse right sidebar'}
+            title={isRightCollapsed ? 'Expand right sidebar' : 'Collapse right sidebar'}
+            onClick={toggleRightSidebar}
+          >
+            <span className="titlebar-btn-icon">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                {isRightCollapsed ? (
+                  <path d="M10 3L6 8l4 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                ) : (
+                  <path d="M6 3l4 5-4 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                )}
+                <path d="M12.5 2v12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </span>
+          </button>
         </div>
       </header>
 
       <div
         className="layout"
-        style={
-          isNarrow
-            ? undefined
-            : {
-                gridTemplateColumns: `${leftWidth}px 4px minmax(0, 1fr) 4px ${rightWidth}px`
-              }
-        }
+        style={layoutStyle}
       >
         {/* ── Left: Workspaces ── */}
-        <div className="panel-left">
-          <WorktreePanel
-            workspaces={workspaces}
-            selectedPath={selectedWt}
-            onSelect={(p) => void loadWorkspace(p)}
-            onCreate={handleCreateWorktree}
-            onOpenFolder={handleOpenFolder}
-            onRemove={handleRemove}
-          />
-        </div>
+        {!isLeftCollapsed && (
+          <div className="panel-left">
+            <WorktreePanel
+              workspaces={workspaces}
+              openedTerminalsByWorkspace={openedTerminalsByWorkspace}
+              selectedPath={selectedWt}
+              gitAvailability={gitAvailability}
+              gitActionPending={isGitActionPending}
+              onSelect={(p) => void loadWorkspace(p)}
+              onOpenTerminalTab={(workspacePath, tabId) => {
+                void handleOpenTerminalTab(workspacePath, tabId)
+              }}
+              onCreate={handleCreateWorktree}
+              onOpenFolder={handleOpenFolder}
+              onRemove={handleRemove}
+              onInstallGit={handleInstallGit}
+              onRetryGit={handleRetryGit}
+            />
+          </div>
+        )}
 
-        {!isNarrow && (
+        {!isNarrow && !isLeftCollapsed && (
           <div
             className="resize-handle resize-handle-left"
             role="separator"
@@ -1281,10 +1729,14 @@ function App(): React.JSX.Element {
 
         {/* ── Center: Terminal ── */}
         <div className="panel-center">
-          <TerminalPanel workspacePath={selectedWt} />
+          <TerminalPanel
+            workspacePath={selectedWt}
+            requestedActiveTab={requestedActiveTerminalTab}
+            onOpenTerminalsChange={setOpenTerminalTabs}
+          />
         </div>
 
-        {!isNarrow && (
+        {!isNarrow && !isRightCollapsed && (
           <div
             className="resize-handle resize-handle-right"
             role="separator"
@@ -1307,6 +1759,7 @@ function App(): React.JSX.Element {
         )}
 
         {/* ── Right: Source Control ── */}
+        {!isRightCollapsed && (
         <div className="panel-right">
           {/* Tab bar */}
           <div className="sc-tabbar" role="tablist" aria-label="Panel tabs">
@@ -1402,30 +1855,34 @@ function App(): React.JSX.Element {
                 </div>
 
                 {/* Publish */}
-                <div className="sc-publish-row">
-                  <button
-                    className="sc-publish-btn"
-                    type="button"
-                    disabled={!canPublish}
-                    onClick={() => void handlePublishBranch(false)}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M8 2l5 5H9.5v7h-3V7H3L8 2Z" fill="currentColor"/>
-                    </svg>
-                    {isPublishing ? 'Publishing…' : publishLabel}
-                  </button>
-                  <button
-                    className="sc-publish-chevron"
-                    type="button"
-                    aria-label="Choose publish remote"
-                    disabled={!canPublish}
-                    onClick={() => void handlePublishBranch(true)}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </button>
-                </div>
+                {branchActionMode && (
+                  <div className="sc-publish-row">
+                    <button
+                      className="sc-publish-btn"
+                      type="button"
+                      disabled={!canPublish}
+                      onClick={() => void handlePublishBranch(false)}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                        <path d="M8 2l5 5H9.5v7h-3V7H3L8 2Z" fill="currentColor"/>
+                      </svg>
+                      {isPublishing ? 'Publishing…' : publishLabel}
+                    </button>
+                    {branchActionMode === 'publish' && (
+                      <button
+                        className="sc-publish-chevron"
+                        type="button"
+                        aria-label="Choose publish remote"
+                        disabled={!canPublish}
+                        onClick={() => void handlePublishBranch(true)}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                          <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div className="sc-publish-meta">{publishMeta}</div>
 
                 {/* File list */}
@@ -1504,32 +1961,6 @@ function App(): React.JSX.Element {
             {rightTab === 'inspector' && (
               <div className="right-scroll">
                 <div className="accord-list">
-                  {/* Subagents — from OpenCode agent config files */}
-                  <AccordionSection
-                    id="subagents"
-                    label="Subagents"
-                    count={subagentsList.length}
-                    open={openAccordions.has('subagents')}
-                    onToggle={() => toggleAccordion('subagents')}
-                  >
-                    {subagentsList.length === 0 ? (
-                      <div className="empty-state">No OpenCode subagents found.<br />Add agents to <code>~/.config/opencode/agents/</code></div>
-                    ) : (
-                      subagentsList.map((agent) => (
-                        <div key={agent.id} className="accord-item accord-item-subagent">
-                          <span className="accord-item-dot" aria-hidden="true" />
-                          <span className="accord-item-name">{agent.name}</span>
-                          {agent.source === 'project' && (
-                            <span className="accord-item-chip">project</span>
-                          )}
-                          {agent.model && (
-                            <span className="accord-item-chip accord-item-chip-model">{agent.model.split('/').at(-1)}</span>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </AccordionSection>
-
                   {/* Context Window — recent OpenCode sessions */}
                   <AccordionSection
                     id="context"
@@ -1569,6 +2000,84 @@ function App(): React.JSX.Element {
                           </div>
                         )
                       })
+                    )}
+                  </AccordionSection>
+
+                  <AccordionSection
+                    id="skill-store"
+                    label="Skill Store"
+                    count={marketplaceResults.length}
+                    open={openAccordions.has('skill-store')}
+                    onToggle={() => toggleAccordion('skill-store')}
+                  >
+                    <div className="skill-store-toolbar">
+                      <input
+                        className="skill-store-input"
+                        type="text"
+                        placeholder="Search skills.sh (e.g. react, postgres)"
+                        value={marketplaceQuery}
+                        onChange={(event) => setMarketplaceQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault()
+                            if (marketplaceSearchTimerRef.current !== null) {
+                              window.clearTimeout(marketplaceSearchTimerRef.current)
+                              marketplaceSearchTimerRef.current = null
+                            }
+                            void handleMarketplaceSearch()
+                          }
+                        }}
+                      />
+                      <button
+                        className="skill-store-search-btn"
+                        type="button"
+                        onClick={() => {
+                          if (marketplaceSearchTimerRef.current !== null) {
+                            window.clearTimeout(marketplaceSearchTimerRef.current)
+                            marketplaceSearchTimerRef.current = null
+                          }
+                          void handleMarketplaceSearch()
+                        }}
+                        disabled={isMarketplaceLoading}
+                      >
+                        {isMarketplaceLoading ? 'Searching…' : 'Search'}
+                      </button>
+                      <button
+                        className="skill-store-open-btn"
+                        type="button"
+                        onClick={() => {
+                          void window.api.openExternalUrl('https://skills.sh')
+                        }}
+                      >
+                        Browse
+                      </button>
+                    </div>
+
+                    {marketplaceError && <div className="skill-store-error">{marketplaceError}</div>}
+
+                    {marketplaceResults.length === 0 ? (
+                      <div className="empty-state">Search to browse skills from skills.sh.</div>
+                    ) : (
+                      marketplaceResults.map((item) => (
+                        <div key={item.id} className="skill-store-item">
+                          <div className="skill-store-item-copy">
+                            <span className="skill-store-item-name">{item.name}</span>
+                            <span className="skill-store-item-meta">
+                              {item.source} · {fmtInstalls(item.installs)} installs
+                            </span>
+                          </div>
+                          <button
+                            className="skill-store-install-btn"
+                            type="button"
+                            disabled={installingSkillId !== null}
+                            onClick={() => {
+                              void handleMarketplaceInstall(item)
+                            }}
+                          >
+                            {installingSkillId === item.id ? 'Installing…' : 'Install'}
+                          </button>
+                        </div>
+                      ))
                     )}
                   </AccordionSection>
 
@@ -1612,10 +2121,46 @@ function App(): React.JSX.Element {
                       <div className="empty-state">No MCP servers detected.</div>
                     ) : (
                       contextInfo!.mcpServers.map((server) => (
-                        <div key={server.id} className="accord-item">
+                        <div
+                          key={server.id}
+                          className="accord-item accord-item-mcp"
+                          title={server.statusDetail ?? `${server.id} is ${mcpStatusLabel(server.status)}.`}
+                        >
                           <AccordItemGlyph iconUrl={server.iconUrl} />
                           <span className="accord-item-name">{server.id}</span>
                           <span className="accord-item-chip">{server.transport}</span>
+                          <span className={`accord-item-chip ${mcpStatusClass(server.status)}`}>
+                            {mcpStatusLabel(server.status)}
+                          </span>
+                          {server.statusDetail && (
+                            <span className="accord-item-meta">{server.statusDetail}</span>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </AccordionSection>
+
+                  {/* Subagents — from OpenCode agent config files */}
+                  <AccordionSection
+                    id="subagents"
+                    label="Subagents"
+                    count={subagentsList.length}
+                    open={openAccordions.has('subagents')}
+                    onToggle={() => toggleAccordion('subagents')}
+                  >
+                    {subagentsList.length === 0 ? (
+                      <div className="empty-state">No OpenCode subagents found.<br />Add agents to <code>~/.config/opencode/agents/</code></div>
+                    ) : (
+                      subagentsList.map((agent) => (
+                        <div key={agent.id} className="accord-item accord-item-subagent">
+                          <span className="accord-item-dot" aria-hidden="true" />
+                          <span className="accord-item-name">{agent.name}</span>
+                          {agent.source === 'project' && (
+                            <span className="accord-item-chip">project</span>
+                          )}
+                          {agent.model && (
+                            <span className="accord-item-chip accord-item-chip-model">{agent.model.split('/').at(-1)}</span>
+                          )}
                         </div>
                       ))
                     )}
@@ -1635,7 +2180,12 @@ function App(): React.JSX.Element {
                     type="button"
                     aria-label="Refresh quota"
                     onClick={() => {
-                      void window.api.getCodexQuota().then(setCodexQuota)
+                      void Promise.all([window.api.getCodexQuota(), window.api.getClaudeQuota()]).then(
+                        ([codex, claude]) => {
+                          setCodexQuota(codex)
+                          setClaudeQuota(claude)
+                        }
+                      )
                     }}
                   >
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -1644,16 +2194,25 @@ function App(): React.JSX.Element {
                   </button>
                 </div>
 
-                {codexQuota ? (
-                  <CodexQuotaCard quota={codexQuota} />
-                ) : (
-                  <div className="empty-state" style={{ padding: '12px 16px', fontSize: '11px' }}>
-                    Quota unavailable — check <code>~/.codex/auth.json</code>
-                  </div>
-                )}
+                <div className="usage-cards">
+                  {codexQuota ? (
+                    <CodexQuotaCard quota={codexQuota} />
+                  ) : (
+                    <div className="empty-state" style={{ padding: '12px 16px', fontSize: '11px' }}>
+                      Codex quota unavailable — check <code>~/.codex/auth.json</code>
+                    </div>
+                  )}
+                  {claudeQuota ? (
+                    <ClaudeQuotaCard quota={claudeQuota} />
+                  ) : (
+                    <div className="empty-state" style={{ padding: '12px 16px', fontSize: '11px' }}>
+                      Claude Code usage estimate unavailable — no recent local transcripts found.
+                    </div>
+                  )}
+                </div>
 
                 {/* Token usage section header */}
-                <div className="usage-header" style={{ marginTop: '1px' }}>
+                <div className="usage-header" style={{ marginTop: '8px' }}>
                   <span className="usage-header-label">Token Usage (30 days)</span>
                   <button
                     className="sc-tool-btn"
@@ -1684,6 +2243,7 @@ function App(): React.JSX.Element {
             )}
           </div>
         </div>
+        )}
       </div>
     </div>
   )

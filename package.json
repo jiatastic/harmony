@@ -1,88 +1,33 @@
 {
-  "name": "harmony",
-  "version": "1.1.0",
-  "description": "Harmony desktop app for managing worktrees, terminals, and AI coding agents.",
-  "main": "./out/main/index.js",
-  "author": "Haoxiang Jia",
-  "homepage": "https://jiatastic.com",
+  "name": "harmony-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
-    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "start": "electron-vite preview",
-    "dev": "electron-vite dev",
-    "build": "npm run typecheck && electron-vite build",
-    "postinstall": "electron-builder install-app-deps",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "npm run build && electron-builder --mac",
-    "build:mac:unsigned": "npm run build && electron-builder --mac --config.mac.identity=null --config.mac.hardenedRuntime=false",
-    "build:linux": "electron-vite build && electron-builder --linux"
-  },
-  "dependencies": {
-    "@electron-toolkit/preload": "^3.0.2",
-    "@electron-toolkit/utils": "^4.0.0",
-    "electron-updater": "^6.8.3",
-    "node-pty": "^1.0.0",
-    "react-grab": "^0.1.28"
+    "dev": "npm run dev -w @harmony/desktop",
+    "dev:desktop": "npm run dev -w @harmony/desktop",
+    "dev:web": "npm run dev -w @harmony/web",
+    "start": "npm run start -w @harmony/desktop",
+    "typecheck": "npm run typecheck -w @harmony/desktop",
+    "build": "npm run build -w @harmony/desktop",
+    "build:desktop": "npm run build -w @harmony/desktop",
+    "build:web": "npm run build -w @harmony/web",
+    "build:unpack": "npm run build:unpack -w @harmony/desktop",
+    "build:win": "npm run build:win -w @harmony/desktop",
+    "build:mac": "npm run build:mac -w @harmony/desktop",
+    "build:mac:unsigned": "npm run build:mac:unsigned -w @harmony/desktop",
+    "build:linux": "npm run build:linux -w @harmony/desktop"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
-    "@electron-toolkit/tsconfig": "^2.0.0",
-    "@types/node": "^22.19.1",
-    "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^5.1.1",
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/xterm": "^5.5.0",
-    "electron": "^39.2.6",
-    "electron-builder": "^26.0.12",
-    "electron-vite": "^5.0.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
-    "prettier": "^3.7.4",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "typescript": "^5.9.3",
-    "vite": "^7.2.6"
-  },
-  "build": {
-    "appId": "com.jiatastic.harmony",
-    "productName": "Harmony",
-    "mac": {
-      "artifactName": "Harmony.${ext}",
-      "category": "public.app-category.developer-tools",
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
-    "win": {
-      "artifactName": "Harmony-Setup.${ext}",
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "artifactName": "Harmony.${ext}",
-      "target": [
-        "AppImage"
-      ],
-      "category": "Development"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "jiatastic",
-        "repo": "harmony",
-        "releaseType": "release"
-      }
-    ]
+    "prettier": "^3.7.4"
   }
 }

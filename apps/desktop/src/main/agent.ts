@@ -12,14 +12,18 @@ const WAITING_PATTERNS = [
   /\b[yY]\/[nN]\b/,
   /select an option/i
 ]
-const EXIT_MARKER_PREFIX = '__HARMONY_AGENT_EXIT__'
 
 type AgentRunRecord = AgentRun & {
   ownerId: number
   recentOutput: string
+  completionTimer?: ReturnType<typeof setTimeout>
+  currentInputLine: string
+  awaitingResponse: boolean
+  sawOutputSincePrompt: boolean
 }
 
 const agentRunsBySession = new Map<string, AgentRunRecord>()
+const COMPLETE_AFTER_QUIET_MS = 5000
 
 function publishUpdate(run: AgentRunRecord): void {
   const target = webContents.fromId(run.ownerId)
@@ -54,22 +58,32 @@ function inferDisplayName(command: string, displayName?: string): string {
   return firstToken || 'agent'
 }
 
-function buildWrappedCommand(runId: string, command: string): string {
-  return `{ ${command.trim()}; }\r__harmony_agent_exit_code=$?\rprintf '\\n${EXIT_MARKER_PREFIX}:${runId}:%s\\n' "$__harmony_agent_exit_code"\r`
-}
-
 function completeRun(run: AgentRunRecord, exitCode: number, signal?: number): void {
+  clearCompletionTimer(run)
   run.exitCode = exitCode
   run.signal = signal
   run.finishedAt = new Date().toISOString()
   run.status = exitCode === 0 ? 'done' : 'error'
+  run.awaitingResponse = false
+  run.sawOutputSincePrompt = false
   run.message =
     exitCode === 0 ? 'Agent completed successfully.' : `Agent exited with code ${exitCode}.`
   publishUpdate(run)
   agentRunsBySession.delete(run.sessionId)
 }
 
+function clearCompletionTimer(run: AgentRunRecord): void {
+  if (!run.completionTimer) {
+    return
+  }
+
+  clearTimeout(run.completionTimer)
+  run.completionTimer = undefined
+}
+
 function markRunWaiting(run: AgentRunRecord): void {
+  clearCompletionTimer(run)
+
   if (run.status === 'waiting') {
     return
   }
@@ -85,14 +99,76 @@ function markRunRunning(run: AgentRunRecord): void {
   }
 
   run.status = 'running'
-  run.message = 'Agent is running.'
+  run.message = 'Agent is working.'
   publishUpdate(run)
+}
+
+function markRunCompleted(run: AgentRunRecord): void {
+  clearCompletionTimer(run)
+
+  run.status = 'done'
+  run.awaitingResponse = false
+  run.sawOutputSincePrompt = false
+  run.finishedAt = new Date().toISOString()
+  run.message = 'Agent completed its latest response.'
+  publishUpdate(run)
+}
+
+function scheduleCompletion(run: AgentRunRecord): void {
+  clearCompletionTimer(run)
+
+  run.completionTimer = setTimeout(() => {
+    const currentRun = agentRunsBySession.get(run.sessionId)
+    if (
+      !currentRun ||
+      currentRun.runId !== run.runId ||
+      !currentRun.awaitingResponse ||
+      !currentRun.sawOutputSincePrompt
+    ) {
+      return
+    }
+
+    currentRun.completionTimer = undefined
+    markRunCompleted(currentRun)
+  }, COMPLETE_AFTER_QUIET_MS)
+}
+
+function beginUserTurn(run: AgentRunRecord): void {
+  clearCompletionTimer(run)
+  run.awaitingResponse = true
+  run.sawOutputSincePrompt = false
+  run.finishedAt = undefined
+  run.exitCode = undefined
+  run.signal = undefined
+  markRunRunning(run)
+}
+
+function appendInput(run: AgentRunRecord, chunk: string): void {
+  for (const char of chunk) {
+    if (char === '\u007f' || char === '\b') {
+      run.currentInputLine = run.currentInputLine.slice(0, -1)
+      continue
+    }
+
+    if (char === '\r' || char === '\n') {
+      if (run.currentInputLine.trim()) {
+        beginUserTurn(run)
+      }
+      run.currentInputLine = ''
+      continue
+    }
+
+    if (char < ' ' || char === '\u001b') {
+      continue
+    }
+
+    run.currentInputLine = `${run.currentInputLine}${char}`.slice(-400)
+  }
 }
 
 async function startAgentRun(
   event: IpcMainInvokeEvent,
-  payload: AgentStartPayload,
-  writeToTerminal: (ownerId: number, sessionId: string, data: string) => boolean
+  payload: AgentStartPayload
 ): Promise<AgentRun> {
   const command = payload.command.trim()
 
@@ -112,26 +188,29 @@ async function startAgentRun(
     workspacePath: payload.workspacePath,
     command,
     displayName: inferDisplayName(command, payload.displayName),
-    status: 'running',
+    status: 'idle',
     startedAt: new Date().toISOString(),
     ownerId: event.sender.id,
     recentOutput: '',
-    message: 'Agent started.'
-  }
-
-  const didWrite = writeToTerminal(
-    event.sender.id,
-    payload.sessionId,
-    buildWrappedCommand(nextRun.runId, command)
-  )
-
-  if (!didWrite) {
-    throw new Error('Unable to find the target terminal session.')
+    message: 'Agent is ready.',
+    currentInputLine: '',
+    awaitingResponse: false,
+    sawOutputSincePrompt: false
   }
 
   agentRunsBySession.set(payload.sessionId, nextRun)
   publishUpdate(nextRun)
   return nextRun
+}
+
+export function handleAgentTerminalInput(sessionId: string, ownerId: number, data: string): void {
+  const run = agentRunsBySession.get(sessionId)
+
+  if (!run || run.ownerId !== ownerId) {
+    return
+  }
+
+  appendInput(run, data)
 }
 
 export function handleAgentTerminalData(sessionId: string, ownerId: number, data: string): void {
@@ -143,22 +222,15 @@ export function handleAgentTerminalData(sessionId: string, ownerId: number, data
 
   run.recentOutput = `${run.recentOutput}${data}`.slice(-4000)
 
-  const exitMatch = run.recentOutput.match(
-    new RegExp(`${EXIT_MARKER_PREFIX}:${run.runId}:(\\d+)`, 'i')
-  )
-
-  if (exitMatch) {
-    completeRun(run, Number(exitMatch[1]))
-    return
-  }
-
-  if (WAITING_PATTERNS.some((pattern) => pattern.test(data))) {
+  if (run.awaitingResponse && WAITING_PATTERNS.some((pattern) => pattern.test(data))) {
     markRunWaiting(run)
     return
   }
 
-  if (data.trim()) {
+  if (run.awaitingResponse && data.trim()) {
+    run.sawOutputSincePrompt = true
     markRunRunning(run)
+    scheduleCompletion(run)
   }
 }
 
@@ -174,20 +246,12 @@ export function handleAgentTerminalExit(
     return
   }
 
-  run.finishedAt = new Date().toISOString()
-  run.exitCode = exitCode
-  run.signal = signal
-  run.status = 'error'
-  run.message = 'Terminal session closed before the agent completed.'
-  publishUpdate(run)
-  agentRunsBySession.delete(sessionId)
+  completeRun(run, exitCode, signal)
 }
 
-export function registerAgentIpc(
-  writeToTerminal: (ownerId: number, sessionId: string, data: string) => boolean
-): void {
+export function registerAgentIpc(): void {
   ipcMain.handle(harmonyChannels.startAgent, (event, payload: AgentStartPayload) =>
-    startAgentRun(event, payload, writeToTerminal)
+    startAgentRun(event, payload)
   )
 }
 

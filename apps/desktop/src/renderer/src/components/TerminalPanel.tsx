@@ -13,6 +13,24 @@ const geminiIconUrl = new URL('../assets/agents/gemini.svg', import.meta.url).hr
 
 interface TerminalPanelProps {
   workspacePath: string | null
+  onOpenTerminalsChange?: (tabs: OpenTerminalTabSummary[]) => void
+  requestedActiveTab?: { workspacePath: string; tabId: string; nonce: number } | null
+}
+
+export interface OpenTerminalTabSummary {
+  id: string
+  workspacePath: string
+  title: string
+  status?: AgentRun['status']
+  isAgent?: boolean
+}
+
+type AgentViewMode = 'chat' | 'terminal'
+
+type AgentChatMessage = {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
 }
 
 type StoredTerminalTab = {
@@ -20,6 +38,10 @@ type StoredTerminalTab = {
   type: 'terminal'
   workspacePath: string
   title: string
+  customTitle?: boolean
+  agent?: AvailableAgent
+  agentViewMode?: AgentViewMode
+  lastKnownStatus?: AgentRun['status']
 }
 
 type StoredBrowserTab = {
@@ -29,6 +51,7 @@ type StoredBrowserTab = {
   title: string
   url: string
   draftUrl: string
+  customTitle?: boolean
 }
 
 type StoredPanelTab = StoredTerminalTab | StoredBrowserTab
@@ -38,9 +61,13 @@ type TerminalTab = {
   type: 'terminal'
   workspacePath: string
   title: string
+  customTitle?: boolean
   sessionId?: string
   agent?: AvailableAgent
   agentRun?: AgentRun
+  agentViewMode: AgentViewMode
+  chatMessages: AgentChatMessage[]
+  lastKnownStatus?: AgentRun['status']
 }
 
 type BrowserTab = {
@@ -48,6 +75,7 @@ type BrowserTab = {
   type: 'browser'
   workspacePath: string
   title: string
+  customTitle?: boolean
   url: string
   draftUrl: string
 }
@@ -81,7 +109,17 @@ function loadTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, 
         }
 
         if (tab.type === 'terminal') {
-          tabs.push({ id: tab.id, type: 'terminal', workspacePath: tab.workspacePath, title: tab.title })
+          tabs.push({
+            id: tab.id,
+            type: 'terminal',
+            workspacePath: tab.workspacePath,
+            title: tab.title,
+            customTitle: tab.customTitle === true,
+            agent: tab.agent,
+            // Chat UI is temporarily hidden, so agent tabs always open in raw terminal mode.
+            agentViewMode: 'terminal',
+            chatMessages: []
+          })
           continue
         }
 
@@ -96,7 +134,8 @@ function loadTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, 
             workspacePath: tab.workspacePath,
             title: tab.title,
             url: tab.url,
-            draftUrl: tab.draftUrl
+            draftUrl: tab.draftUrl,
+            customTitle: tab.customTitle === true
           })
         }
       }
@@ -125,7 +164,10 @@ function saveTerminalLayout(tabs: PanelTab[], activeTabIds: Record<string, strin
             id: tab.id,
             type: 'terminal',
             workspacePath: tab.workspacePath,
-            title: tab.title
+            title: tab.title,
+            customTitle: tab.customTitle === true,
+            agent: tab.agent,
+            agentViewMode: tab.agent ? tab.agentViewMode : undefined
           }
         : {
             id: tab.id,
@@ -133,7 +175,8 @@ function saveTerminalLayout(tabs: PanelTab[], activeTabIds: Record<string, strin
             workspacePath: tab.workspacePath,
             title: tab.title,
             url: tab.url,
-            draftUrl: tab.draftUrl
+            draftUrl: tab.draftUrl,
+            customTitle: tab.customTitle === true
           }
     )
 
@@ -217,6 +260,87 @@ function normalizeUrl(raw: string): string {
   return `https://${value}`
 }
 
+function truncateTitle(value: string, max = 36): string {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (compact.length <= max) return compact
+  return `${compact.slice(0, max - 1)}…`
+}
+
+function extractTaskContext(command: string): string | null {
+  const value = command.trim()
+  if (!value) return null
+
+  const tokens = value.match(/"[^"]+"|'[^']+'|\S+/g) ?? []
+  if (tokens.length <= 1) return null
+
+  const ignored = new Set([
+    'opencode',
+    'codex',
+    'claude',
+    'gemini',
+    'agent',
+    'exec',
+    'task',
+    'run',
+    'npm',
+    'npx',
+    'bun'
+  ])
+
+  const cleaned = tokens
+    .slice(1)
+    .map((token) => token.replace(/^['"]|['"]$/g, '').trim())
+    .filter((token) => token && !token.startsWith('-'))
+
+  for (const token of cleaned) {
+    const lower = token.toLowerCase()
+    if (ignored.has(lower)) continue
+    if (token.length < 3) continue
+    return truncateTitle(token)
+  }
+
+  return null
+}
+
+function buildTaskAwareTitle(tab: TerminalTab, run: AgentRun): string {
+  const displayName = truncateTitle(run.displayName || tab.agent?.name || tab.title)
+  const context = extractTaskContext(run.command)
+  if (!context) {
+    return truncateTitle(`${displayName} · ${leaf(tab.workspacePath)}`)
+  }
+  if (context.toLowerCase() === displayName.toLowerCase()) {
+    return displayName
+  }
+  return truncateTitle(`${displayName}: ${context}`)
+}
+
+function normalizeTerminalTitle(rawTitle: string, workspacePath: string, fallbackTitle: string): string | null {
+  const title = stripAnsi(rawTitle).replace(/\s+/g, ' ').trim()
+  if (!title) {
+    return null
+  }
+
+  const lower = title.toLowerCase()
+  if (lower.includes('harmony-') && (lower.includes(':zsh') || lower.includes(':bash'))) {
+    return null
+  }
+
+  const primarySegment = title.split(/[·|]/)[0]?.trim() ?? title
+  const normalizedPath = primarySegment.replace(/\\/g, '/')
+  const pathLeaf = normalizedPath.split('/').filter(Boolean).at(-1)
+
+  if (pathLeaf && pathLeaf !== '~' && pathLeaf !== '.' && pathLeaf.length <= 48) {
+    return truncateTitle(pathLeaf)
+  }
+
+  if (title.length <= 48 && title.toLowerCase() !== fallbackTitle.toLowerCase()) {
+    return truncateTitle(title)
+  }
+
+  const workspaceLeaf = leaf(workspacePath)
+  return workspaceLeaf !== fallbackTitle ? truncateTitle(workspaceLeaf) : null
+}
+
 function titleFromUrl(url: string): string {
   try {
     const host = new URL(url).hostname
@@ -224,6 +348,88 @@ function titleFromUrl(url: string): string {
   } catch {
     return 'Browser'
   }
+}
+
+function stripAnsi(value: string): string {
+  return value
+    .replace(/\x1B\][^\u0007\x1B]*(?:\u0007|\x1B\\)/g, '')
+    .replace(/\x1B[P^_][\s\S]*?\x1B\\/g, '')
+    .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+}
+
+function normalizeChatChunk(value: string): string {
+  return stripAnsi(value)
+    .replace(/\r/g, '')
+    .replace(/\u0007/g, '')
+    .replace(/^\s*\d+(?:;\??\d+)+(?:;\??)?/gm, '')
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) {
+        return true
+      }
+
+      if (/^[╭╮╰╯│─┌┐└┘├┤┬┴┼\s]+$/.test(trimmed)) {
+        return false
+      }
+
+      if (/^>_ /.test(trimmed)) {
+        return false
+      }
+
+      if (/^│.*│$/.test(trimmed)) {
+        return false
+      }
+
+      return true
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+}
+
+function hasVisibleChatContent(value: string): boolean {
+  return value.replace(/\s+/g, '').length > 0
+}
+
+function shouldCaptureSystemChunk(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) {
+    return false
+  }
+
+  return ['error', 'failed', 'exit', 'denied', 'timed out', 'warning'].some((needle) => normalized.includes(needle))
+}
+
+function appendChatChunk(
+  messages: AgentChatMessage[],
+  role: AgentChatMessage['role'],
+  chunk: string
+): AgentChatMessage[] {
+  if (!hasVisibleChatContent(chunk)) {
+    return messages
+  }
+
+  const last = messages.at(-1)
+  if (last && last.role === role) {
+    return [
+      ...messages.slice(0, -1),
+      {
+        ...last,
+        content: `${last.content}${chunk}`
+      }
+    ]
+  }
+
+  return [...messages, { id: uuid(), role, content: chunk }]
+}
+
+function addUserChatMessage(messages: AgentChatMessage[], content: string): AgentChatMessage[] {
+  const trimmed = content.trim()
+  if (!trimmed) {
+    return messages
+  }
+
+  return [...messages, { id: uuid(), role: 'user', content: trimmed }]
 }
 
 interface BrowserPaneProps {
@@ -440,6 +646,9 @@ interface TerminalHostProps {
   visible: boolean
   agent?: AvailableAgent
   onSessionChange?: (sessionId: string | null) => void
+  onTitleChange?: (title: string) => void
+  onOutputData?: (data: string) => void
+  onInputData?: (data: string) => void
 }
 
 function TerminalHost({
@@ -447,14 +656,21 @@ function TerminalHost({
   workspacePath,
   visible,
   agent,
-  onSessionChange
+  onSessionChange,
+  onTitleChange,
+  onOutputData,
+  onInputData
 }: TerminalHostProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const sessionRef = useRef<TerminalSession | null>(null)
   const didStartAgentRef = useRef(false)
+  const wheelRemainderRef = useRef(0)
   const onSessionChangeRef = useRef(onSessionChange)
+  const onTitleChangeRef = useRef(onTitleChange)
+  const onOutputDataRef = useRef(onOutputData)
+  const onInputDataRef = useRef(onInputData)
 
   const focusTerminal = useCallback((): void => {
     // Defer focus slightly so it wins over the launcher button/tab that was just clicked.
@@ -466,6 +682,18 @@ function TerminalHost({
   useEffect(() => {
     onSessionChangeRef.current = onSessionChange
   }, [onSessionChange])
+
+  useEffect(() => {
+    onTitleChangeRef.current = onTitleChange
+  }, [onTitleChange])
+
+  useEffect(() => {
+    onOutputDataRef.current = onOutputData
+  }, [onOutputData])
+
+  useEffect(() => {
+    onInputDataRef.current = onInputData
+  }, [onInputData])
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -490,6 +718,36 @@ function TerminalHost({
     fitRef.current = fit
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
+    term.attachCustomWheelEventHandler((event) => {
+      // Always map trackpad/mouse wheel gestures to the xterm viewport so they
+      // scroll terminal history instead of being forwarded to the shell app.
+      if (event.ctrlKey || event.metaKey || event.deltaY === 0) {
+        return true
+      }
+
+      const fontSize = term.options.fontSize ?? 13
+      const lineHeight = term.options.lineHeight ?? 1
+      const pixelsPerLine = fontSize * lineHeight
+      if (!pixelsPerLine) {
+        return true
+      }
+
+      wheelRemainderRef.current += event.deltaY / pixelsPerLine
+      const lineDelta =
+        wheelRemainderRef.current > 0
+          ? Math.floor(wheelRemainderRef.current)
+          : Math.ceil(wheelRemainderRef.current)
+
+      if (lineDelta === 0) {
+        event.preventDefault()
+        return false
+      }
+
+      wheelRemainderRef.current -= lineDelta
+      term.scrollLines(lineDelta)
+      event.preventDefault()
+      return false
+    })
     term.open(host)
     fit.fit()
     xtermRef.current = term
@@ -508,7 +766,10 @@ function TerminalHost({
     ro.observe(host)
 
     const offData = window.api.onTerminalData((ev) => {
-      if (ev.sessionId === sessionRef.current?.sessionId) term.write(ev.data)
+      if (ev.sessionId === sessionRef.current?.sessionId) {
+        term.write(ev.data)
+        onOutputDataRef.current?.(ev.data)
+      }
     })
 
     const offExit = window.api.onTerminalExit((ev) => {
@@ -521,7 +782,10 @@ function TerminalHost({
 
     const inputOff = term.onData((data) => {
       const s = sessionRef.current
-      if (s) window.api.writeTerminal(s.sessionId, data)
+      if (s) {
+        onInputDataRef.current?.(data)
+        window.api.writeTerminal(s.sessionId, data)
+      }
     })
 
     const resizeOff = term.onResize(({ cols, rows }) => {
@@ -529,11 +793,16 @@ function TerminalHost({
       if (s) window.api.resizeTerminal(s.sessionId, cols, rows)
     })
 
+    const titleOff = term.onTitleChange((title) => {
+      onTitleChangeRef.current?.(title)
+    })
+
     void window.api
       .createTerminal({
         cwd: workspacePath,
         themeHint: isDarkMode() ? 'dark' : 'light',
-        persistentId: tabId
+        persistentId: agent ? undefined : tabId,
+        initialCommand: agent?.command
       })
       .then((session) => {
         if (cancelled) {
@@ -586,6 +855,7 @@ function TerminalHost({
       offExit()
       inputOff.dispose()
       resizeOff.dispose()
+      titleOff.dispose()
       host.removeEventListener('pointerdown', handlePointerDown)
       const s = sessionRef.current
       if (s) window.api.destroyTerminal(s.sessionId)
@@ -593,6 +863,7 @@ function TerminalHost({
       sessionRef.current = null
       fitRef.current = null
       xtermRef.current = null
+      wheelRemainderRef.current = 0
       term.dispose()
     }
   }, [agent?.command, agent?.name, tabId, workspacePath])
@@ -609,13 +880,22 @@ function TerminalHost({
   )
 }
 
-export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.Element {
+export function TerminalPanel({
+  workspacePath,
+  onOpenTerminalsChange,
+  requestedActiveTab
+}: TerminalPanelProps): React.JSX.Element {
   const [tabs, setTabs] = useState<PanelTab[]>(() => loadTerminalLayout().tabs)
   const [activeTabIds, setActiveTabIds] = useState<Record<string, string | null>>(
     () => loadTerminalLayout().activeTabIds
   )
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
   const initializedWorkspacesRef = useRef(new Set(tabs.map((tab) => tab.workspacePath)))
+  const renameInputRef = useRef<HTMLInputElement | null>(null)
+  const terminalInputBuffersRef = useRef<Record<string, string>>({})
+  const terminalEchoSuppressionsRef = useRef<Record<string, string>>({})
 
   const currentWorkspaceTabs = useMemo(
     () => (workspacePath ? tabs.filter((tab) => tab.workspacePath === workspacePath) : []),
@@ -626,6 +906,110 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
   const firstTerminalWorkspace =
     currentWorkspaceTabs.find((tab) => tab.type === 'terminal')?.workspacePath ?? ''
 
+  const terminalStatus = useCallback((tab: TerminalTab): AgentRun['status'] | undefined => {
+    if (!tab.agent) {
+      return undefined
+    }
+
+    return tab.agentRun?.status ?? tab.lastKnownStatus
+  }, [])
+
+  const appendAgentOutput = useCallback((tabId: string, rawData: string): void => {
+    let chunk = normalizeChatChunk(rawData)
+    const echoSuppression = terminalEchoSuppressionsRef.current[tabId] ?? ''
+    if (echoSuppression) {
+      let consumed = 0
+      while (
+        consumed < chunk.length &&
+        consumed < echoSuppression.length &&
+        chunk[consumed] === echoSuppression[consumed]
+      ) {
+        consumed++
+      }
+      if (consumed > 0) {
+        chunk = chunk.slice(consumed)
+        terminalEchoSuppressionsRef.current[tabId] = echoSuppression.slice(consumed)
+      }
+    }
+
+    if (!hasVisibleChatContent(chunk)) {
+      return
+    }
+
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== tabId || tab.type !== 'terminal' || !tab.agent) {
+          return tab
+        }
+
+        const hasUserTurn = tab.chatMessages.some((message) => message.role === 'user')
+        if (!hasUserTurn && !shouldCaptureSystemChunk(chunk)) {
+          return tab
+        }
+
+        const role: AgentChatMessage['role'] = hasUserTurn ? 'assistant' : 'system'
+        const chatMessages = appendChatChunk(tab.chatMessages, role, chunk)
+        return chatMessages === tab.chatMessages ? tab : { ...tab, chatMessages }
+      })
+    )
+  }, [])
+
+  const appendCommittedUserInput = useCallback((tabId: string, content: string): void => {
+    const trimmed = content.trim()
+    if (!trimmed) {
+      return
+    }
+
+    terminalEchoSuppressionsRef.current[tabId] =
+      (terminalEchoSuppressionsRef.current[tabId] ?? '') + trimmed
+
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== tabId || tab.type !== 'terminal' || !tab.agent) {
+          return tab
+        }
+
+        const chatMessages = addUserChatMessage(tab.chatMessages, trimmed)
+        return chatMessages === tab.chatMessages ? tab : { ...tab, chatMessages }
+      })
+    )
+  }, [])
+
+  const handleTerminalInputChunk = useCallback((tabId: string, chunk: string): void => {
+    let buffer = terminalInputBuffersRef.current[tabId] ?? ''
+    const committedLines: string[] = []
+
+    for (const char of chunk) {
+      if (char === '\u007f' || char === '\b') {
+        buffer = buffer.slice(0, -1)
+        continue
+      }
+
+      if (char === '\r' || char === '\n') {
+        if (buffer.trim()) {
+          committedLines.push(buffer.trim())
+        }
+        buffer = ''
+        continue
+      }
+
+      if (char < ' ' || char === '\u001b') {
+        continue
+      }
+
+      buffer = `${buffer}${char}`.slice(-400)
+    }
+
+    terminalInputBuffersRef.current[tabId] = buffer
+    if (committedLines.length === 0) {
+      return
+    }
+
+    for (const line of committedLines) {
+      appendCommittedUserInput(tabId, line)
+    }
+  }, [appendCommittedUserInput])
+
   useEffect(() => {
     if (!workspacePath || initializedWorkspacesRef.current.has(workspacePath)) {
       return
@@ -633,7 +1017,10 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
 
     initializedWorkspacesRef.current.add(workspacePath)
     const id = uuid()
-    setTabs((prev) => [...prev, { id, type: 'terminal', workspacePath, title: leaf(workspacePath) }])
+    setTabs((prev) => [
+      ...prev,
+      { id, type: 'terminal', workspacePath, title: leaf(workspacePath), agentViewMode: 'terminal', chatMessages: [] }
+    ])
     setActiveTabIds((prev) => ({ ...prev, [workspacePath]: id }))
   }, [workspacePath])
 
@@ -651,6 +1038,51 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
     saveTerminalLayout(tabs, activeTabIds)
   }, [activeTabIds, tabs])
 
+  useEffect(() => {
+    if (!requestedActiveTab) {
+      return
+    }
+
+    if (
+      !tabs.some(
+        (tab) => tab.type === 'terminal' && tab.workspacePath === requestedActiveTab.workspacePath && tab.id === requestedActiveTab.tabId
+      )
+    ) {
+      return
+    }
+
+    setActiveTabIds((prev) =>
+      prev[requestedActiveTab.workspacePath] === requestedActiveTab.tabId
+        ? prev
+        : { ...prev, [requestedActiveTab.workspacePath]: requestedActiveTab.tabId }
+    )
+  }, [requestedActiveTab, tabs])
+
+  useEffect(() => {
+    if (!renamingTabId) {
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    })
+  }, [renamingTabId])
+
+  useEffect(() => {
+    onOpenTerminalsChange?.(
+      tabs
+        .filter((tab): tab is TerminalTab => tab.type === 'terminal')
+        .map((tab) => ({
+          id: tab.id,
+          workspacePath: tab.workspacePath,
+          title: tab.title,
+          status: tab.agent ? (tab.agentRun?.status ?? tab.lastKnownStatus) : undefined,
+          isAgent: Boolean(tab.agent)
+        }))
+    )
+  }, [onOpenTerminalsChange, tabs])
+
   const bindSession = useCallback((tabId: string, sessionId: string | null): void => {
     setTabs((prev) =>
       prev.map((tab) =>
@@ -661,11 +1093,62 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
     )
   }, [])
 
+  const startRenameTab = useCallback((tab: PanelTab): void => {
+    setRenamingTabId(tab.id)
+    setRenameDraft(tab.title)
+  }, [])
+
+  const cancelRenameTab = useCallback((): void => {
+    setRenamingTabId(null)
+    setRenameDraft('')
+  }, [])
+
+  const commitRenameTab = useCallback((tabId: string): void => {
+    const nextTitle = truncateTitle(renameDraft, 48)
+    if (!nextTitle.trim()) {
+      cancelRenameTab()
+      return
+    }
+
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.id === tabId
+          ? {
+              ...tab,
+              title: nextTitle,
+              customTitle: true
+            }
+          : tab
+      )
+    )
+    cancelRenameTab()
+  }, [cancelRenameTab, renameDraft])
+
+  const updateTerminalTitle = useCallback((tabId: string, nextTitle: string): void => {
+    setTabs((prev) =>
+      prev.map((tab) => {
+        if (tab.id !== tabId || tab.type !== 'terminal' || tab.agentRun || tab.customTitle) {
+          return tab
+        }
+
+        const normalized = normalizeTerminalTitle(nextTitle, tab.workspacePath, tab.title)
+        if (!normalized || normalized === tab.title) {
+          return tab
+        }
+
+        return { ...tab, title: normalized }
+      })
+    )
+  }, [])
+
   const addTab = useCallback(() => {
     const cwd = workspacePath ?? firstTerminalWorkspace
     if (!cwd) return
     const id = uuid()
-    setTabs((prev) => [...prev, { id, type: 'terminal', workspacePath: cwd, title: leaf(cwd) }])
+    setTabs((prev) => [
+      ...prev,
+      { id, type: 'terminal', workspacePath: cwd, title: leaf(cwd), agentViewMode: 'terminal', chatMessages: [] }
+    ])
     setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
   }, [firstTerminalWorkspace, workspacePath])
 
@@ -699,7 +1182,10 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
           type: 'terminal',
           workspacePath: cwd,
           title: agent.name,
-          agent
+          agent,
+          agentViewMode: 'terminal',
+          chatMessages: [],
+          lastKnownStatus: 'idle'
         }
       ])
       setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
@@ -709,6 +1195,8 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
 
   const closeTab = useCallback(
     (id: string): void => {
+      delete terminalInputBuffersRef.current[id]
+      delete terminalEchoSuppressionsRef.current[id]
       setTabs((prev) => {
         const closing = prev.find((t) => t.id === id)
         if (!closing) {
@@ -755,7 +1243,14 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
     return window.api.onAgentUpdate((run) => {
       setTabs((prev) =>
         prev.map((tab) =>
-          tab.type === 'terminal' && tab.sessionId === run.sessionId ? { ...tab, agentRun: run } : tab
+          tab.type === 'terminal' && tab.sessionId === run.sessionId
+            ? {
+                ...tab,
+                agentRun: run,
+                lastKnownStatus: run.status,
+                title: tab.customTitle ? tab.title : buildTaskAwareTitle(tab, run)
+              }
+            : tab
         )
       )
     })
@@ -776,7 +1271,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
           ...tab,
           url: nextUrl,
           draftUrl: nextUrl,
-          title: titleFromUrl(nextUrl)
+          title: tab.customTitle ? tab.title : titleFromUrl(nextUrl)
         }
       })
     )
@@ -802,19 +1297,45 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
             role="tab"
             aria-selected={activeId === tab.id}
           >
-            {tab.type === 'terminal' && tab.agentRun && (
+            {tab.type === 'terminal' && terminalStatus(tab) && (
               <span
-                className={`terminal-tab-status is-${tab.agentRun.status}`}
-                aria-label={tab.agentRun.status}
+                className={`terminal-tab-status is-${terminalStatus(tab)}`}
+                aria-label={terminalStatus(tab)}
               />
             )}
-            <button
-              type="button"
-              className="terminal-tab-label"
-              onClick={() => setActiveTabIds((prev) => ({ ...prev, [tab.workspacePath]: tab.id }))}
-            >
-              {tab.title}
-            </button>
+            {renamingTabId === tab.id ? (
+              <input
+                ref={renameInputRef}
+                className="terminal-tab-rename"
+                type="text"
+                value={renameDraft}
+                aria-label="Rename tab"
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onBlur={() => commitRenameTab(tab.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    commitRenameTab(tab.id)
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancelRenameTab()
+                  }
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="terminal-tab-label"
+                onClick={() => setActiveTabIds((prev) => ({ ...prev, [tab.workspacePath]: tab.id }))}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  startRenameTab(tab)
+                }}
+                title="Right click to rename"
+              >
+                {tab.title}
+              </button>
+            )}
             <button
               type="button"
               className="terminal-tab-close"
@@ -852,7 +1373,7 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
       {availableAgents.length > 0 && (
         <div className="agent-launchers">
           <div className="agent-launchers-header">
-            <span className="section-label">Agents</span>
+            <span className="section-label">AI Workspace</span>
           </div>
           <div className="agent-launcher-list">
             {availableAgents.map((agent) => (
@@ -876,14 +1397,26 @@ export function TerminalPanel({ workspacePath }: TerminalPanelProps): React.JSX.
       <div className="terminal-panes">
         {tabs.map((tab) => (
           tab.type === 'terminal' ? (
-            <TerminalHost
+            <div
               key={tab.id}
-              tabId={tab.id}
-              workspacePath={tab.workspacePath}
-              visible={tab.workspacePath === workspacePath && tab.id === activeId}
-              agent={tab.agent}
-              onSessionChange={(sessionId) => bindSession(tab.id, sessionId)}
-            />
+              className="terminal-stack"
+              style={{ display: tab.workspacePath === workspacePath && tab.id === activeId ? 'flex' : 'none' }}
+            >
+              <TerminalHost
+                tabId={tab.id}
+                workspacePath={tab.workspacePath}
+                visible={
+                  tab.workspacePath === workspacePath &&
+                  tab.id === activeId &&
+                  (!tab.agent || tab.agentViewMode === 'terminal')
+                }
+                agent={tab.agent}
+                onSessionChange={(sessionId) => bindSession(tab.id, sessionId)}
+                onTitleChange={(title) => updateTerminalTitle(tab.id, title)}
+                onOutputData={(data) => appendAgentOutput(tab.id, data)}
+                onInputData={(data) => handleTerminalInputChunk(tab.id, data)}
+              />
+            </div>
           ) : (
             <BrowserPane
               key={tab.id}

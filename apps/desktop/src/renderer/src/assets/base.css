@@ -14,6 +14,7 @@ body {
   min-height: 100vh;
   color: var(--foreground);
   background: var(--background);
+  font-size: 15px;
   line-height: 1.5;
   font-family: var(--font-sans);
   letter-spacing: var(--tracking-normal, 0);

@@ -6,12 +6,21 @@ import { disposeWorkbench, registerWorkbenchIpc } from './workbench'
 import { initializeUpdater, registerUpdaterIpc } from './updater'
 
 function createWindow(): void {
+  const macChrome =
+    process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 14, y: 12 }
+        }
+      : {}
+
   // Create the browser window.
   const mainWindow = new BrowserWindow({
     width: 900,
     height: 670,
     show: false,
     autoHideMenuBar: true,
+    ...macChrome,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

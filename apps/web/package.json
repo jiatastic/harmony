@@ -1,0 +1,9 @@
+{
+  "name": "@harmony/web",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "node -e \"console.log('Web app workspace is ready. Add your site here.')\"",
+    "build": "node -e \"console.log('Web app workspace is ready. Add your site here.')\""
+  }
+}

@@ -1,15 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { BranchInfo, WorktreeSummary } from '../../../shared/workbench'
+import type { BranchInfo, GitAvailability, WorktreeSummary } from '../../../shared/workbench'
 
 export type WorkspaceItem = WorktreeSummary & { isOpenedFolder?: boolean }
 
 interface WorktreePanelProps {
   workspaces: WorkspaceItem[]
+  openedTerminalsByWorkspace?: Record<string, Array<{ id: string; title: string; status?: string; isAgent?: boolean }>>
   selectedPath: string | null
+  gitAvailability: GitAvailability | null
+  gitActionPending: boolean
   onSelect: (path: string) => void
-  onCreate: (branch: string, workspacePath?: string) => Promise<void>
+  onOpenTerminalTab: (workspacePath: string, tabId: string) => void
+  onCreate: (branch: BranchInfo, workspacePath?: string) => Promise<void>
   onOpenFolder: () => Promise<void>
   onRemove: (path: string, isOpenedFolder: boolean) => Promise<void>
+  onInstallGit: () => Promise<void>
+  onRetryGit: () => Promise<void>
 }
 
 function stripBranchSuffix(name: string): string {
@@ -18,6 +24,27 @@ function stripBranchSuffix(name: string): string {
 
 function leafPath(path: string): string {
   return path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? path
+}
+
+function terminalStatusLabel(status?: string, isAgent?: boolean): string | null {
+  if (!isAgent) {
+    return null
+  }
+
+  switch (status) {
+    case 'idle':
+      return 'ready'
+    case 'running':
+      return 'working'
+    case 'waiting':
+      return 'waiting'
+    case 'done':
+      return 'completed'
+    case 'error':
+      return 'failed'
+    default:
+      return null
+  }
 }
 
 /** Highlight the matched portion of `text` given a search `query`. */
@@ -36,11 +63,17 @@ function Highlight({ text, query }: { text: string; query: string }): React.JSX.
 
 export function WorktreePanel({
   workspaces,
+  openedTerminalsByWorkspace,
   selectedPath,
+  gitAvailability,
+  gitActionPending,
   onSelect,
+  onOpenTerminalTab,
   onCreate,
   onOpenFolder,
-  onRemove
+  onRemove,
+  onInstallGit,
+  onRetryGit
 }: WorktreePanelProps): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -119,12 +152,12 @@ export function WorktreePanel({
     setBranchesLoading(false)
   }
 
-  const commitCreate = async (branch: string): Promise<void> => {
-    const b = branch.trim()
+  const commitCreate = async (branch: BranchInfo): Promise<void> => {
+    const b = branch.name.trim()
     if (!b) return
     setCreating(true)
     try {
-      await onCreate(b, createContextPath ?? undefined)
+      await onCreate({ ...branch, name: b }, createContextPath ?? undefined)
       cancelCreate()
     } finally {
       setCreating(false)
@@ -170,8 +203,8 @@ export function WorktreePanel({
             } else if (e.key === 'Enter') {
               e.preventDefault()
               const opt = options[activeIdx]
-              if (opt) void commitCreate(opt.branch.name)
-              else if (trimmed) void commitCreate(trimmed)
+              if (opt) void commitCreate(opt.branch)
+              else if (trimmed) void commitCreate({ name: trimmed, remote: false })
             } else if (e.key === 'Escape') {
               cancelCreate()
             }
@@ -193,13 +226,13 @@ export function WorktreePanel({
         <div className="wt-picker-list" role="listbox" aria-label="Branch options">
           {options.map((opt, i) => (
             <button
-              key={`${opt.kind}:${opt.branch.name}`}
+              key={`${opt.kind}:${opt.branch.remoteRef ?? opt.branch.name}`}
               className={`wt-picker-item${i === activeIdx ? ' is-active' : ''}${opt.kind === 'new' ? ' is-new' : ''}`}
               type="button"
               role="option"
               aria-selected={i === activeIdx}
               disabled={creating}
-              onClick={() => void commitCreate(opt.branch.name)}
+              onClick={() => void commitCreate(opt.branch)}
               onMouseEnter={() => setActiveIdx(i)}
             >
               {opt.kind === 'new' ? (
@@ -237,6 +270,36 @@ export function WorktreePanel({
     </div>
   )
 
+  const renderOpenedTerminals = (workspacePath: string): React.JSX.Element | null => {
+    const tabs = openedTerminalsByWorkspace?.[workspacePath] ?? []
+    if (tabs.length === 0) {
+      return null
+    }
+
+    return (
+      <div className="wt-open-terminals" role="list" aria-label="Opened terminals">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            className="wt-open-terminal-chip"
+            type="button"
+            role="listitem"
+            title={tab.title}
+            onClick={() => onOpenTerminalTab(workspacePath, tab.id)}
+          >
+            {terminalStatusLabel(tab.status, tab.isAgent) && (
+              <span className={`wt-open-terminal-status${tab.status ? ` is-${tab.status}` : ''}`}>
+                <span className={`wt-open-terminal-dot${tab.status ? ` is-${tab.status}` : ''}`} aria-hidden="true" />
+                {terminalStatusLabel(tab.status, tab.isAgent)}
+              </span>
+            )}
+            <span className="wt-open-terminal-name">{tab.title}</span>
+          </button>
+        ))}
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="section-header">
@@ -257,6 +320,31 @@ export function WorktreePanel({
           </button>
         </div>
       </div>
+
+      {gitAvailability && !gitAvailability.available && (
+        <div className="git-notice" role="alert">
+          <div className="git-notice-title">Git required</div>
+          <div className="git-notice-copy">{gitAvailability.helpText}</div>
+          <div className="git-notice-actions">
+            <button
+              className="btn btn-primary git-notice-btn"
+              type="button"
+              disabled={gitActionPending}
+              onClick={() => void onInstallGit()}
+            >
+              {gitActionPending ? 'Working…' : gitAvailability.installActionLabel}
+            </button>
+            <button
+              className="btn btn-ghost git-notice-btn"
+              type="button"
+              disabled={gitActionPending}
+              onClick={() => void onRetryGit()}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="worktree-scroll">
         {/* ── Git worktrees grouped by repo ── */}
@@ -297,31 +385,34 @@ export function WorktreePanel({
             {group.items.map((ws) => {
               const active = ws.path === selectedPath
               return (
-                <button
-                  key={ws.path}
-                  className={`wt-branch-row${active ? ' is-active' : ''}`}
-                  type="button"
-                  onClick={() => onSelect(ws.path)}
-                >
-                  <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
-                  <span className="wt-branch-name">{ws.branch}</span>
-                  {ws.isMain ? (
-                    <span className="wt-main-badge">main</span>
-                  ) : (
+                <div key={ws.path} className="wt-branch-block">
+                  <div className={`wt-branch-row${active ? ' is-active' : ''}`}>
                     <button
-                      className="wt-remove-btn"
+                      className="wt-branch-select"
                       type="button"
-                      disabled={removing === ws.path}
-                      aria-label={`Remove ${ws.branch}`}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void handleRemove(ws.path, false)
-                      }}
+                      onClick={() => onSelect(ws.path)}
                     >
-                      ×
+                      <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
+                      <span className="wt-branch-name">{ws.branch}</span>
                     </button>
-                  )}
-                </button>
+                    {ws.isMain ? (
+                      <span className="wt-main-badge">main</span>
+                    ) : (
+                      <button
+                        className="wt-remove-btn"
+                        type="button"
+                        disabled={removing === ws.path}
+                        aria-label={`Remove ${ws.branch}`}
+                        onClick={() => {
+                          void handleRemove(ws.path, false)
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                  {renderOpenedTerminals(ws.path)}
+                </div>
               )
             })}
 
@@ -354,27 +445,30 @@ export function WorktreePanel({
             {folderItems.map((ws) => {
               const active = ws.path === selectedPath
               return (
-                <button
-                  key={ws.path}
-                  className={`wt-branch-row${active ? ' is-active' : ''}`}
-                  type="button"
-                  onClick={() => onSelect(ws.path)}
-                >
-                  <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
-                  <span className="wt-branch-name">{ws.name}</span>
-                  <button
-                    className="wt-remove-btn"
-                    type="button"
-                    disabled={removing === ws.path}
-                    aria-label={`Remove ${ws.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void handleRemove(ws.path, true)
-                    }}
-                  >
-                    ×
-                  </button>
-                </button>
+                <div key={ws.path} className="wt-branch-block">
+                  <div className={`wt-branch-row${active ? ' is-active' : ''}`}>
+                    <button
+                      className="wt-branch-select"
+                      type="button"
+                      onClick={() => onSelect(ws.path)}
+                    >
+                      <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
+                      <span className="wt-branch-name">{ws.name}</span>
+                    </button>
+                    <button
+                      className="wt-remove-btn"
+                      type="button"
+                      disabled={removing === ws.path}
+                      aria-label={`Remove ${ws.name}`}
+                      onClick={() => {
+                        void handleRemove(ws.path, true)
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  {renderOpenedTerminals(ws.path)}
+                </div>
               )
             })}
           </div>

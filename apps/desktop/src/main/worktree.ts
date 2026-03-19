@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promises as fs, watch as watchFs, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -17,6 +16,7 @@ import type {
   WorkspaceSnapshot
 } from '../shared/workbench'
 import { harmonyChannels } from '../shared/workbench'
+import { runGitCommand } from './git'
 
 const SKIPPED_NAMES = new Set(['.git', 'node_modules', 'dist', 'out', '.DS_Store'])
 const MAX_TREE_DEPTH = 4
@@ -38,17 +38,7 @@ async function getRepositoryRootFromPath(path: string): Promise<string> {
 }
 
 function runGit(args: string[], cwd: string): Promise<string> {
-  return new Promise((resolveOutput, reject) => {
-    execFile('git', args, { cwd, encoding: 'utf8' }, (error, stdout, stderr) => {
-      if (error) {
-        const message = stderr.trim() || stdout.trim() || error.message
-        reject(new Error(message))
-        return
-      }
-
-      resolveOutput(stdout.trim())
-    })
-  })
+  return runGitCommand(args, { cwd })
 }
 
 async function getRepositoryRoot(): Promise<string> {
@@ -530,18 +520,21 @@ async function listBranches(workspacePath?: string): Promise<import('../shared/w
     .filter(Boolean)
   const localSet = new Set(localBranches)
 
-  // Remote-only branches: strip the "origin/" prefix, skip HEAD pointers, skip if local copy exists
+  // Remote-only branches: keep the full remote ref for tracking, but display the short branch name.
   const remoteBranches = remoteOut
     .split('\n')
     .map((b) => b.trim())
     .filter(Boolean)
     .filter((b) => !b.includes('HEAD'))
-    .map((b) => b.replace(/^[^/]+\//, '')) // strip "origin/" etc.
-    .filter((b) => !localSet.has(b))
+    .map((remoteRef) => ({
+      remoteRef,
+      name: remoteRef.replace(/^[^/]+\//, '')
+    }))
+    .filter((branch) => !localSet.has(branch.name))
 
   return [
     ...localBranches.map((name) => ({ name, remote: false })),
-    ...remoteBranches.map((name) => ({ name, remote: true }))
+    ...remoteBranches.map(({ name, remoteRef }) => ({ name, remote: true, remoteRef }))
   ]
 }
 
@@ -569,9 +562,12 @@ async function createWorktree(payload: WorktreeCreatePayload): Promise<WorktreeS
     join(dirname(repositoryRoot), `${basename(repositoryRoot)}-${sanitizeBranchName(branch)}`)
 
   const exists = await branchExists(branch, repositoryRoot)
+  const baseRef = payload.baseRef?.trim()
   const args = exists
     ? ['worktree', 'add', resolve(worktreePath), branch]
-    : ['worktree', 'add', '-b', branch, resolve(worktreePath), ...(payload.baseRef?.trim() ? [payload.baseRef.trim()] : [])]
+    : baseRef
+      ? ['worktree', 'add', '--track', '-b', branch, resolve(worktreePath), baseRef]
+      : ['worktree', 'add', '-b', branch, resolve(worktreePath)]
 
   await runGit(args, repositoryRoot)
 

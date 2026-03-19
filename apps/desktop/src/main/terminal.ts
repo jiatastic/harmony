@@ -28,9 +28,16 @@ export type TerminalExitDispatch = {
   signal?: number
 }
 
+export type TerminalInputDispatch = {
+  ownerId: number
+  sessionId: string
+  data: string
+}
+
 const terminalSessions = new Map<string, TerminalRecord>()
 const terminalDataListeners = new Set<(payload: TerminalDataDispatch) => void>()
 const terminalExitListeners = new Set<(payload: TerminalExitDispatch) => void>()
+const terminalInputListeners = new Set<(payload: TerminalInputDispatch) => void>()
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
@@ -62,6 +69,11 @@ function getShellLaunch(): { shell: string; args: string[] } {
   return { shell: process.env.SHELL || '/bin/zsh', args: ['-l'] }
 }
 
+function inferCommandLabel(command: string, fallback: string): string {
+  const firstToken = command.trim().split(/\s+/).at(0)
+  return firstToken ? basename(firstToken) : fallback
+}
+
 function notifyTerminalData(payload: TerminalDataDispatch): void {
   for (const listener of terminalDataListeners) {
     listener(payload)
@@ -70,6 +82,12 @@ function notifyTerminalData(payload: TerminalDataDispatch): void {
 
 function notifyTerminalExit(payload: TerminalExitDispatch): void {
   for (const listener of terminalExitListeners) {
+    listener(payload)
+  }
+}
+
+function notifyTerminalInput(payload: TerminalInputDispatch): void {
+  for (const listener of terminalInputListeners) {
     listener(payload)
   }
 }
@@ -108,14 +126,19 @@ async function createTerminalSession(
   }
 
   const { shell, args } = getShellLaunch()
+  const initialCommand = payload.initialCommand?.trim()
   const sessionId = randomUUID()
-  const spawnArgs =
-    payload.persistentId && process.platform !== 'win32'
+  const spawnArgs = initialCommand
+    ? process.platform === 'win32'
+      ? ['/d', '/s', '/c', initialCommand]
+      : ['-lc', `exec ${initialCommand}`]
+    : payload.persistentId && process.platform !== 'win32'
       ? [
           '-lc',
           `if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s ${shellQuote(getPersistentSessionName(payload.persistentId))} -c ${shellQuote(cwd)}; else exec ${shellQuote(shell)} -l; fi`
         ]
       : args
+  const sessionLabel = initialCommand ? inferCommandLabel(initialCommand, basename(shell)) : basename(shell)
 
   const terminal = spawn(shell, spawnArgs, {
     name: 'xterm-256color',
@@ -167,7 +190,7 @@ async function createTerminalSession(
   return {
     sessionId,
     cwd,
-    shell: basename(shell)
+    shell: sessionLabel
   }
 }
 
@@ -226,6 +249,14 @@ export function onTerminalExit(listener: (payload: TerminalExitDispatch) => void
   }
 }
 
+export function onTerminalInput(listener: (payload: TerminalInputDispatch) => void): () => void {
+  terminalInputListeners.add(listener)
+
+  return () => {
+    terminalInputListeners.delete(listener)
+  }
+}
+
 export function writeTerminalInputForOwner(
   ownerId: number,
   sessionId: string,
@@ -238,6 +269,11 @@ export function writeTerminalInputForOwner(
   }
 
   record.instance.write(data)
+  notifyTerminalInput({
+    ownerId,
+    sessionId,
+    data
+  })
   return true
 }
 

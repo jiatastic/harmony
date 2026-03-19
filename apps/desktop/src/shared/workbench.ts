@@ -3,6 +3,7 @@ export type WorkspaceEntryKind = 'file' | 'directory'
 export interface BranchInfo {
   name: string
   remote: boolean
+  remoteRef?: string
 }
 export type AgentStatus = 'idle' | 'running' | 'waiting' | 'done' | 'error'
 
@@ -63,6 +64,22 @@ export interface CodexQuota {
   additionalLimits: CodexQuotaLimit[]
 }
 
+export interface ClaudeUsageWindow {
+  sessionCount: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  totalCacheTokens: number
+  totalCostUSD?: number
+}
+
+export interface ClaudeQuota {
+  source: 'local-estimate'
+  note: string
+  rolling5h: ClaudeUsageWindow
+  rolling7d: ClaudeUsageWindow
+  rolling30d: ClaudeUsageWindow
+}
+
 export type AppUpdatePhase =
   | 'idle'
   | 'checking'
@@ -89,6 +106,8 @@ export interface AppUpdateState {
 
 export const harmonyChannels = {
   openFolder: 'dialog:openFolder',
+  gitStatus: 'git:status',
+  installGit: 'git:install',
   listAvailableAgents: 'agent:listAvailable',
   listWorktrees: 'worktree:list',
   listBranches: 'worktree:branches',
@@ -99,6 +118,9 @@ export const harmonyChannels = {
   watchWorkspaceChangesStop: 'workspace:watch:stop',
   workspaceDidChange: 'workspace:didChange',
   getContextInfo: 'context:get',
+  searchSkillsMarketplace: 'skills:marketplace:search',
+  auditSkillFromMarketplace: 'skills:marketplace:audit',
+  installSkillFromMarketplace: 'skills:marketplace:install',
   getWorkspace: 'workspace:get',
   readFile: 'file:read',
   writeFile: 'file:write',
@@ -118,6 +140,7 @@ export const harmonyChannels = {
   listSessionStats: 'context:sessions',
   getUsageSummary: 'usage:summary',
   getCodexQuota: 'codex:quota',
+  getClaudeQuota: 'claude:quota',
   openExternalUrl: 'shell:openExternalUrl',
   getUpdateState: 'app:update:getState',
   checkForUpdates: 'app:update:check',
@@ -192,6 +215,8 @@ export interface McpServerSummary {
   id: string
   transport: string
   iconUrl?: string
+  status: 'connected' | 'disconnected' | 'error'
+  statusDetail?: string
 }
 
 export interface SubagentSummary {
@@ -211,6 +236,49 @@ export interface ContextInfo {
   skills: SkillSummary[]
   mcpServers: McpServerSummary[]
   subagents: SubagentSummary[]
+}
+
+export interface SkillMarketplaceItem {
+  id: string
+  skillId: string
+  name: string
+  installs: number
+  source: string
+}
+
+export interface SkillMarketplaceSearchPayload {
+  query: string
+  limit?: number
+}
+
+export interface SkillMarketplaceSearchResult {
+  query: string
+  count: number
+  durationMs: number
+  items: SkillMarketplaceItem[]
+}
+
+export interface SkillMarketplaceInstallPayload {
+  source: string
+  skill: string
+}
+
+export type SkillMarketplaceRisk = 'safe' | 'low' | 'medium' | 'high' | 'critical' | 'unknown'
+
+export interface SkillMarketplaceAuditPayload {
+  source: string
+  skill: string
+}
+
+export interface SkillMarketplaceAuditResult {
+  risk: SkillMarketplaceRisk
+  alerts: number | null
+  score: number | null
+  analyzedAt: string | null
+}
+
+export interface SkillMarketplaceInstallResult {
+  summary: string
 }
 
 export interface ReadFilePayload {
@@ -261,6 +329,7 @@ export interface CreateTerminalPayload {
   cwd: string
   themeHint?: 'light' | 'dark'
   persistentId?: string
+  initialCommand?: string
 }
 
 export interface TerminalSession {
@@ -274,6 +343,14 @@ export interface AvailableAgent {
   name: string
   command: string
   binaryPath: string
+}
+
+export interface GitAvailability {
+  available: boolean
+  binaryPath: string | null
+  installActionLabel: string
+  helpText: string
+  canAutoInstall: boolean
 }
 
 export interface TerminalDataEvent {
@@ -310,6 +387,8 @@ export interface AgentRun {
 
 export interface HarmonyApi {
   openFolder(): Promise<string | null>
+  getGitAvailability(): Promise<GitAvailability>
+  installGit(): Promise<string>
   listAvailableAgents(): Promise<AvailableAgent[]>
   listWorktrees(workspacePaths?: string[]): Promise<WorktreeSummary[]>
   listBranches(workspacePath?: string): Promise<BranchInfo[]>
@@ -321,6 +400,9 @@ export interface HarmonyApi {
     listener: (event: WorkspaceWatchEvent) => void
   ): Promise<() => Promise<void>>
   getContextInfo(): Promise<ContextInfo>
+  searchSkillsMarketplace(payload: SkillMarketplaceSearchPayload): Promise<SkillMarketplaceSearchResult>
+  auditSkillFromMarketplace(payload: SkillMarketplaceAuditPayload): Promise<SkillMarketplaceAuditResult>
+  installSkillFromMarketplace(payload: SkillMarketplaceInstallPayload): Promise<SkillMarketplaceInstallResult>
   getWorkspace(workspacePath: string): Promise<WorkspaceSnapshot>
   readFile(payload: ReadFilePayload): Promise<FileDocument>
   writeFile(payload: SaveFilePayload): Promise<void>
@@ -340,6 +422,7 @@ export interface HarmonyApi {
   listSessionStats(workspacePath: string): Promise<SessionStat[]>
   getUsageSummary(): Promise<AgentUsage[]>
   getCodexQuota(): Promise<CodexQuota | null>
+  getClaudeQuota(): Promise<ClaudeQuota | null>
   openExternalUrl(url: string): Promise<void>
   getUpdateState(): Promise<AppUpdateState>
   checkForUpdates(): Promise<AppUpdateState>

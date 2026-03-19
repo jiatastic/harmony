@@ -13,6 +13,7 @@ import type {
 } from '../shared/workbench'
 import { harmonyChannels } from '../shared/workbench'
 import { ensureBundledSkillsInstalled, getBundledCommitMessageSkill } from './bundledSkills'
+import { runGitCommand } from './git'
 
 const DEFAULT_GIT_TIMEOUT_MS = 30_000
 const PUSH_TIMEOUT_MS = 120_000
@@ -26,6 +27,10 @@ function runCommand(
   cwd: string,
   timeout = DEFAULT_GIT_TIMEOUT_MS
 ): Promise<string> {
+  if (command === 'git') {
+    return runGitCommand(args, { cwd, timeout, maxBuffer: MAX_BUFFER_BYTES })
+  }
+
   return new Promise((resolveOutput, reject) => {
     execFile(
       command,

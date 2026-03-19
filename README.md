@@ -1,24 +1,41 @@
 # Harmony
 
-Harmony is a desktop workspace for managing Git worktrees, local terminals, and AI coding agents in one place.
+Harmony is a desktop workspace for coding with multiple terminal-based agents, Git worktrees, and local repositories in one place.
 
-## What It Does
+It is designed for people who want the speed of CLI agents without losing visibility over branches, diffs, terminals, and repository context.
 
-- Open multiple repositories and folders side by side
-- Create and manage Git worktrees from the app
-- View file trees and workspace changes
-- Run local terminal sessions inside each workspace
-- Track agent context, skills, MCP servers, and token usage
-- Generate commit messages and handle common source control actions
+## Why Harmony
 
-## Tech Stack
+- Run multiple agent sessions side by side
+- Keep work isolated with Git worktrees
+- See repository changes without leaving the app
+- Switch between raw terminals and source control quickly
+- Build on a monorepo foundation that can grow into desktop + web
 
-- Electron
-- React
-- TypeScript
-- electron-vite
+## What You Can Do
 
-## Getting Started
+| Feature | What it gives you |
+| --- | --- |
+| Multi-workspace view | Open repositories and folders in one desktop app |
+| Built-in terminals | Run shell sessions directly inside each workspace |
+| Agent launchers | Start CLI agents such as Codex, Claude Code, Cursor, Gemini, and OpenCode |
+| Worktree management | Create and manage isolated branches for parallel work |
+| Source control panel | Stage, commit, and publish changes from the UI |
+| Context inspection | Inspect skills, MCP servers, session stats, and usage |
+
+## Repository Structure
+
+Harmony now uses a monorepo layout so the desktop app and future website can evolve together.
+
+```text
+apps/
+  desktop/   Electron app
+  web/       Future website
+```
+
+Today, the desktop app is the main product. The `web` workspace is intentionally lightweight and ready for the next phase.
+
+## Quick Start
 
 ### Install dependencies
 
@@ -26,13 +43,13 @@ Harmony is a desktop workspace for managing Git worktrees, local terminals, and 
 npm install
 ```
 
-### Start development
+### Run the desktop app in development
 
 ```bash
 npm run dev
 ```
 
-### Type-check
+### Type-check the desktop app
 
 ```bash
 npm run typecheck
@@ -40,48 +57,62 @@ npm run typecheck
 
 ## Build
 
-### Build for macOS
+### Build the desktop app
 
 ```bash
-npm run build:mac
+npm run build
 ```
 
-For local smoke tests without Apple signing credentials:
+### Build macOS locally without signing
 
 ```bash
 npm run build:mac:unsigned
 ```
 
-### Build for Windows
+### Platform builds
 
 ```bash
+npm run build:mac
 npm run build:win
-```
-
-### Build for Linux
-
-```bash
 npm run build:linux
 ```
 
-Packaged artifacts are written to `dist/`.
+Desktop release artifacts are generated from `apps/desktop`.
 
-## Release Artifacts
+## Release Notes
 
-- macOS: `Harmony-<version>-<arch>.dmg` and `Harmony-<version>-<arch>-mac.zip`
-- Windows: `Harmony-<version>-<arch>-setup.exe`
-- Linux: `Harmony-<version>-<arch>.AppImage` and distro-specific packages
+GitHub Releases are published from version tags:
 
-## Notes
+```bash
+git tag v0.0.1
+git push origin v0.0.1
+```
 
-- Public macOS downloads should be built with a valid `Developer ID Application`
-  certificate so `electron-builder` can code-sign the app.
-- `npm run build:mac` will notarize the macOS app when one of these credential
-  sets is present:
-  - `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
-  - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
-- Use `npm run build:mac:unsigned` only for local testing. Unsigned builds are
-  expected to trigger macOS security warnings when shared with other users.
-- If local signing fails with `com.apple.provenance`, rebuild in a clean CI
-  environment or reinstall `electron` from a non-quarantined source before
-  creating the release artifact.
+The release workflow installs dependencies at the monorepo root and builds the desktop app from `apps/desktop`.
+
+## Tech Stack
+
+- Electron
+- React
+- TypeScript
+- electron-vite
+- xterm.js
+- node-pty
+
+## Roadmap
+
+- Polish the desktop UX for agent-heavy workflows
+- Add a proper website in `apps/web`
+- Extract shared modules when desktop and web start overlapping
+- Expand release automation and onboarding docs
+
+## macOS Signing and Notarization
+
+Public macOS releases should be signed and notarized.
+
+`npm run build:mac` will notarize the app when one of these credential sets is available:
+
+- `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`
+- `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`
+
+Use `npm run build:mac:unsigned` only for local testing.

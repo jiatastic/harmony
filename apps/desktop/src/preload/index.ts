@@ -30,6 +30,8 @@ function subscribeToChannel<T>(channel: string, listener: (payload: T) => void):
 
 const api: HarmonyApi = {
   openFolder: () => ipcRenderer.invoke(harmonyChannels.openFolder),
+  getGitAvailability: () => ipcRenderer.invoke(harmonyChannels.gitStatus),
+  installGit: () => ipcRenderer.invoke(harmonyChannels.installGit),
   listAvailableAgents: () => ipcRenderer.invoke(harmonyChannels.listAvailableAgents),
   listWorktrees: (workspacePaths?: string[]) =>
     ipcRenderer.invoke(harmonyChannels.listWorktrees, workspacePaths),
@@ -61,6 +63,12 @@ const api: HarmonyApi = {
     }
   },
   getContextInfo: () => ipcRenderer.invoke(harmonyChannels.getContextInfo),
+  searchSkillsMarketplace: (payload) =>
+    ipcRenderer.invoke(harmonyChannels.searchSkillsMarketplace, payload),
+  auditSkillFromMarketplace: (payload) =>
+    ipcRenderer.invoke(harmonyChannels.auditSkillFromMarketplace, payload),
+  installSkillFromMarketplace: (payload) =>
+    ipcRenderer.invoke(harmonyChannels.installSkillFromMarketplace, payload),
   createTerminal: (payload: CreateTerminalPayload) =>
     ipcRenderer.invoke(harmonyChannels.createTerminal, payload),
   destroyTerminal: (sessionId: string) =>
@@ -93,6 +101,7 @@ const api: HarmonyApi = {
     ipcRenderer.invoke(harmonyChannels.listSessionStats, workspacePath),
   getUsageSummary: () => ipcRenderer.invoke(harmonyChannels.getUsageSummary),
   getCodexQuota: () => ipcRenderer.invoke(harmonyChannels.getCodexQuota),
+  getClaudeQuota: () => ipcRenderer.invoke(harmonyChannels.getClaudeQuota),
   openExternalUrl: (url: string) => ipcRenderer.invoke(harmonyChannels.openExternalUrl, url),
   getUpdateState: () => ipcRenderer.invoke(harmonyChannels.getUpdateState),
   checkForUpdates: () => ipcRenderer.invoke(harmonyChannels.checkForUpdates),

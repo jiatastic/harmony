@@ -39,5 +39,6 @@ jobs:
 
       - name: Build and publish release artifacts
         run: ${{ matrix.build_command }}
+        working-directory: apps/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
