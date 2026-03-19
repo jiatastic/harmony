@@ -4,7 +4,7 @@
 
 ### A desktop workspace for running CLI coding agents across terminals, repos, and worktrees
 
-[Download v0.0.1](https://github.com/jiatastic/harmony/releases/tag/v0.0.1) · [GitHub](https://github.com/jiatastic/harmony)
+[Download v0.0.2](https://github.com/jiatastic/harmony/releases/tag/v0.0.2) · [GitHub](https://github.com/jiatastic/harmony)
 
 </div>
 
@@ -95,8 +95,8 @@ npm run build:mac:unsigned
 Harmony releases are published from Git tags.
 
 ```bash
-git tag v0.0.1
-git push origin v0.0.1
+git tag v0.0.2
+git push origin v0.0.2
 ```
 
 The GitHub release workflow installs dependencies from the monorepo root and builds the desktop app from `apps/desktop`.
