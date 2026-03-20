@@ -36,6 +36,8 @@ mac:
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
 linux:
+  executableName: harmony
+  packageName: harmony
   target:
     - AppImage
     - deb
