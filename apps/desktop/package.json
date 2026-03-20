@@ -20,8 +20,9 @@
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
-    "build:mac": "npm run build && electron-builder --mac",
-    "build:mac:unsigned": "npm run build && electron-builder --mac --config.mac.identity=null --config.mac.hardenedRuntime=false",
+    "build:mac": "npm run build && electron-builder --mac --config.directories.output=/var/tmp/harmony-desktop-dist",
+    "build:mac:unsigned": "npm run build && electron-builder --mac --config.mac.identity=null --config.mac.hardenedRuntime=false --config.directories.output=/var/tmp/harmony-desktop-dist",
+    "release:mac": "npm run build && electron-builder --mac --publish always --config.directories.output=/var/tmp/harmony-desktop-dist",
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
