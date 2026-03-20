@@ -473,7 +473,18 @@ export function WorktreePanel({
         )}
 
         {workspaces.length === 0 && (
-          <div className="empty-state">No workspaces open.</div>
+          <div className="empty-state empty-state-workspaces">
+            <div>No workspaces open.</div>
+            <div className="empty-state-copy">Open a Git folder to view or create worktrees.</div>
+            <button
+              className="btn btn-ghost empty-state-action"
+              type="button"
+              disabled={opening}
+              onClick={() => void handleOpenFolder()}
+            >
+              {opening ? 'Opening…' : 'Open folder'}
+            </button>
+          </div>
         )}
       </div>
     </>

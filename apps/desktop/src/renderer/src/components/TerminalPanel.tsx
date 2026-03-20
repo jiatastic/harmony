@@ -207,37 +207,35 @@ function cssVar(name: string, fallback: string): string {
 }
 
 function terminalTheme(): ITheme {
-  const background = cssVar('--background', isDarkMode() ? '#0a0a0a' : '#ffffff')
-  const foreground = cssVar('--foreground', isDarkMode() ? '#e0e0e0' : '#383a42')
-  const primary = cssVar('--primary', isDarkMode() ? '#ffffff' : '#526eff')
-  const secondary = cssVar('--secondary', isDarkMode() ? '#3b82f6' : '#4078f2')
-  const accent = cssVar('--accent', isDarkMode() ? '#a855f7' : '#a626a4')
-  const muted = cssVar('--muted-foreground', isDarkMode() ? '#94a3b8' : '#696c77')
-  const destructive = cssVar('--destructive', isDarkMode() ? '#ef4444' : '#e45649')
+  const background = cssVar('--terminal-surface', '#0b1220')
+  const foreground = cssVar('--terminal-foreground', '#e5eefb')
+  const accent = cssVar('--terminal-accent', '#58c4ff')
+  const muted = cssVar('--terminal-muted', '#8ca0bc')
+  const selection = cssVar('--terminal-selection', 'rgba(88,196,255,0.2)')
 
   return {
     background,
     foreground,
-    cursor: primary,
+    cursor: accent,
     cursorAccent: background,
-    selectionBackground: isDarkMode() ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)',
+    selectionBackground: selection,
     selectionForeground: foreground,
-    black: background,
-    red: destructive,
-    green: cssVar('--chart-3', isDarkMode() ? '#4ade80' : '#50a14f'),
-    yellow: cssVar('--chart-5', isDarkMode() ? '#fbbf24' : '#c18401'),
-    blue: secondary,
-    magenta: accent,
-    cyan: cssVar('--chart-2', isDarkMode() ? '#22d3ee' : '#0184bc'),
-    white: foreground,
+    black: '#0f172a',
+    red: '#f87171',
+    green: '#4ade80',
+    yellow: '#fbbf24',
+    blue: '#60a5fa',
+    magenta: '#c084fc',
+    cyan: '#67e8f9',
+    white: '#dbe7fb',
     brightBlack: muted,
-    brightRed: destructive,
-    brightGreen: cssVar('--chart-3', isDarkMode() ? '#86efac' : '#98c379'),
-    brightYellow: cssVar('--chart-5', isDarkMode() ? '#fde68a' : '#e5c07b'),
-    brightBlue: cssVar('--ring', isDarkMode() ? '#93c5fd' : '#61afef'),
-    brightMagenta: cssVar('--accent', isDarkMode() ? '#c084fc' : '#c678dd'),
-    brightCyan: cssVar('--chart-2', isDarkMode() ? '#67e8f9' : '#56b6c2'),
-    brightWhite: cssVar('--card', isDarkMode() ? '#ffffff' : '#fafafa')
+    brightRed: '#fca5a5',
+    brightGreen: '#86efac',
+    brightYellow: '#fcd34d',
+    brightBlue: '#93c5fd',
+    brightMagenta: '#d8b4fe',
+    brightCyan: '#a5f3fc',
+    brightWhite: '#f8fbff'
   }
 }
 
@@ -719,8 +717,10 @@ function TerminalHost({
       cursorInactiveStyle: 'outline',
       fontFamily: `${cssVar('--font-mono', "'Fira Code', monospace")}, 'SF Mono', Menlo, monospace`,
       fontSize: 13,
-      fontWeight: '600',
-      lineHeight: 1.4,
+      fontWeight: '500',
+      lineHeight: 1.36,
+      letterSpacing: 0.15,
+      minimumContrastRatio: 1.1,
       scrollback: 5000,
       theme: terminalTheme()
     })
@@ -1406,90 +1406,102 @@ export function TerminalPanel({
   return (
     <div className="terminal-wrapper">
       <div className="terminal-tabs">
-        {currentWorkspaceTabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={`terminal-tab${activeId === tab.id ? ' is-active' : ''}`}
-            role="tab"
-            aria-selected={activeId === tab.id}
-          >
-            {tab.type === 'terminal' && terminalStatus(tab) && (
-              <span
-                className={`terminal-tab-status is-${terminalStatus(tab)}`}
-                aria-label={terminalStatus(tab)}
-              />
-            )}
-            {renamingTabId === tab.id ? (
-              <input
-                ref={renameInputRef}
-                className="terminal-tab-rename"
-                type="text"
-                value={renameDraft}
-                aria-label="Rename tab"
-                onChange={(e) => setRenameDraft(e.target.value)}
-                onBlur={() => commitRenameTab(tab.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+        <div className="terminal-tab-list" role="tablist" aria-label="Terminal tabs">
+          {currentWorkspaceTabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={`terminal-tab${activeId === tab.id ? ' is-active' : ''}`}
+              role="tab"
+              aria-selected={activeId === tab.id}
+            >
+              {tab.type === 'terminal' && terminalStatus(tab) && (
+                <span
+                  className={`terminal-tab-status is-${terminalStatus(tab)}`}
+                  aria-label={terminalStatus(tab)}
+                />
+              )}
+              {renamingTabId === tab.id ? (
+                <input
+                  ref={renameInputRef}
+                  className="terminal-tab-rename"
+                  type="text"
+                  value={renameDraft}
+                  aria-label="Rename tab"
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onBlur={() => commitRenameTab(tab.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      commitRenameTab(tab.id)
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      cancelRenameTab()
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="terminal-tab-label"
+                  onClick={() => setActiveTabIds((prev) => ({ ...prev, [tab.workspacePath]: tab.id }))}
+                  onContextMenu={(e) => {
                     e.preventDefault()
-                    commitRenameTab(tab.id)
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault()
-                    cancelRenameTab()
-                  }
-                }}
-              />
-            ) : (
+                    startRenameTab(tab)
+                  }}
+                  title="Right click to rename"
+                >
+                  {tab.title}
+                </button>
+              )}
               <button
                 type="button"
-                className="terminal-tab-label"
-                onClick={() => setActiveTabIds((prev) => ({ ...prev, [tab.workspacePath]: tab.id }))}
-                onContextMenu={(e) => {
-                  e.preventDefault()
-                  startRenameTab(tab)
+                className="terminal-tab-close"
+                aria-label="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  closeTab(tab.id)
                 }}
-                title="Right click to rename"
               >
-                {tab.title}
+                ×
               </button>
-            )}
-            <button
-              type="button"
-              className="terminal-tab-close"
-              aria-label="Close tab"
-              onClick={(e) => {
-                e.stopPropagation()
-                closeTab(tab.id)
-              }}
-            >
-              ×
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="terminal-tab-add"
-          aria-label="New terminal"
-          onClick={addTab}
-          disabled={!workspacePath}
-        >
-          +
-        </button>
-        <button
-          type="button"
-          className="terminal-tab-add terminal-tab-add-browser"
-          aria-label="New browser tab"
-          onClick={addBrowserTab}
-          title="New browser tab"
-          disabled={!workspacePath}
-        >
-          Web
-        </button>
+            </div>
+          ))}
+        </div>
+        <div className="terminal-tab-actions">
+          <button
+            type="button"
+            className="terminal-tab-add"
+            aria-label="New terminal"
+            onClick={addTab}
+            disabled={!workspacePath}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="terminal-tab-add terminal-tab-add-browser"
+            aria-label="New browser tab"
+            onClick={addBrowserTab}
+            title="New browser tab"
+            disabled={!workspacePath}
+          >
+            Web
+          </button>
+        </div>
       </div>
 
       {availableAgents.length > 0 && (
         <div className="agent-launchers">
           <div className="agent-launchers-header">
-            <span className="section-label">AI Workspace</span>
+            <div className="agent-launchers-heading">
+              <div className="agent-launchers-title-row">
+                <span className="agent-launchers-title">AI Workspace</span>
+                <span className="agent-launchers-context">{leaf(workspacePath)}</span>
+              </div>
+              <div className="agent-launchers-copy">
+                Launch a coding agent directly inside this workspace without leaving the terminal surface.
+              </div>
+            </div>
           </div>
           <div className="agent-launcher-list">
             {availableAgents.map((agent) => (
@@ -1585,7 +1597,10 @@ export function TerminalPanel({
 
       {currentWorkspaceTabs.length === 0 && (
         <div className="terminal-empty">
-          <p>No session attached. Open a terminal tab to start in this workspace.</p>
+          <p>
+            No session attached for <code>{leaf(workspacePath)}</code>. Open a terminal tab to start
+            working in this workspace.
+          </p>
         </div>
       )}
 

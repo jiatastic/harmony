@@ -22,7 +22,7 @@ const SKIPPED_NAMES = new Set(['.git', 'node_modules', 'dist', 'out', '.DS_Store
 const MAX_TREE_DEPTH = 4
 const MAX_TREE_NODES = 600
 
-let repositoryRootPromise: Promise<string> | null = null
+let repositoryRootPromise: Promise<string | null> | null = null
 const workspaceWatchers = new Map<string, WorkspaceWatchRegistration>()
 
 interface WorkspaceWatchRegistration {
@@ -41,14 +41,24 @@ function runGit(args: string[], cwd: string): Promise<string> {
   return runGitCommand(args, { cwd })
 }
 
-async function getRepositoryRoot(): Promise<string> {
+async function getRepositoryRoot(): Promise<string | null> {
   if (!repositoryRootPromise) {
-    repositoryRootPromise = runGit(['rev-parse', '--show-toplevel'], resolve(process.cwd())).then(
-      (output) => resolve(output)
-    )
+    repositoryRootPromise = runGit(['rev-parse', '--show-toplevel'], resolve(process.cwd()))
+      .then((output) => resolve(output))
+      .catch(() => null)
   }
 
   return repositoryRootPromise
+}
+
+async function getRepositoryRootOrThrow(action: 'list branches' | 'create worktrees'): Promise<string> {
+  const repositoryRoot = await getRepositoryRoot()
+
+  if (!repositoryRoot) {
+    throw new Error(`Open a Git folder first to ${action}.`)
+  }
+
+  return repositoryRoot
 }
 
 function ensureInsideWorkspace(rootPath: string, targetPath: string): string {
@@ -258,7 +268,10 @@ async function listWorktreesMerged(workspacePaths?: string[]): Promise<WorktreeS
     }
   }
 
-  await addFromRoot(await getRepositoryRoot())
+  const defaultRepositoryRoot = await getRepositoryRoot()
+  if (defaultRepositoryRoot) {
+    await addFromRoot(defaultRepositoryRoot)
+  }
   if (workspacePaths?.length) {
     for (const p of workspacePaths) {
       try {
@@ -552,7 +565,7 @@ export function disposeWorkspaceWatches(): void {
 async function listBranches(workspacePath?: string): Promise<import('../shared/workbench').BranchInfo[]> {
   const repositoryRoot = workspacePath
     ? await getRepositoryRootFromPath(workspacePath)
-    : await getRepositoryRoot()
+    : await getRepositoryRootOrThrow('list branches')
 
   const [localOut, remoteOut] = await Promise.all([
     runGit(['branch', '--format=%(refname:short)', '--sort=-committerdate'], repositoryRoot),
@@ -597,7 +610,7 @@ async function branchExists(branch: string, repositoryRoot: string): Promise<boo
 async function createWorktree(payload: WorktreeCreatePayload): Promise<WorktreeSummary> {
   const repositoryRoot = payload.workspacePath
     ? await getRepositoryRootFromPath(payload.workspacePath)
-    : await getRepositoryRoot()
+    : await getRepositoryRootOrThrow('create worktrees')
   const branch = payload.branch.trim()
 
   if (!branch) {

@@ -1322,10 +1322,19 @@ function App(): React.JSX.Element {
   }, [openTerminalTabs])
 
   const refresh = useCallback(
-    async (preferWt?: string, preferFile?: string) => {
+    async ({
+      preferWt,
+      preferFile,
+      extraWorkspacePaths = []
+    }: {
+      preferWt?: string
+      preferFile?: string
+      extraWorkspacePaths?: string[]
+    } = {}) => {
       setStatus('Loading\u2026')
       try {
-        const wts = await window.api.listWorktrees(openedFolders.length ? openedFolders : undefined)
+        const workspacePaths = Array.from(new Set([...openedFolders, ...extraWorkspacePaths]))
+        const wts = await window.api.listWorktrees(workspacePaths.length ? workspacePaths : undefined)
         setWorktrees(wts)
         const fallback =
           preferWt ??
@@ -1353,34 +1362,46 @@ function App(): React.JSX.Element {
     return () => window.clearTimeout(t)
   }, [refresh])
 
-  const handleOpenFolder = useCallback(async (): Promise<void> => {
+  const openFolderAndRefresh = useCallback(async (): Promise<string | null> => {
     try {
       const path = await window.api.openFolder()
-      if (!path) return
+      if (!path) return null
       setOpenedFolders((prev) => (prev.includes(path) ? prev : [...prev, path]))
-      await loadWorkspace(path)
+      await refresh({ preferWt: path, extraWorkspacePaths: [path] })
       setStatus(`Opened ${leafPath(path)}`)
+      return path
     } catch (err: unknown) {
       setStatus(err instanceof Error ? err.message : 'Open failed')
+      return null
     }
-  }, [loadWorkspace])
+  }, [refresh])
+
+  const handleOpenFolder = useCallback(async (): Promise<void> => {
+    await openFolderAndRefresh()
+  }, [openFolderAndRefresh])
 
   const handleCreateWorktree = useCallback(
     async (branch: BranchInfo, workspacePath?: string): Promise<void> => {
       try {
-        const path = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0]
+        let path = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0] ?? null
+        if (!path) {
+          path = await openFolderAndRefresh()
+        }
+        if (!path) {
+          return
+        }
         const worktree = await window.api.createWorktree({
           branch: branch.name,
           baseRef: branch.remote ? branch.remoteRef : undefined,
           workspacePath: path
         })
-        await refresh(worktree.path)
+        await refresh({ preferWt: worktree.path, extraWorkspacePaths: [path] })
         setStatus(`Created ${worktree.name}`)
       } catch (err: unknown) {
         setStatus(err instanceof Error ? err.message : 'Create failed')
       }
     },
-    [refresh, selectedWt, worktrees, openedFolders]
+    [openFolderAndRefresh, refresh, selectedWt, worktrees, openedFolders]
   )
 
   const handleOpenTerminalTab = useCallback(
@@ -1615,7 +1636,7 @@ function App(): React.JSX.Element {
         setOpenedFolders((prev) => prev.filter((p) => p !== path))
         if (selectedWt === path) {
           const fallback = workspaces.find((w) => w.path !== path)?.path ?? undefined
-          await refresh(fallback)
+          await refresh({ preferWt: fallback })
         }
         setStatus(`Removed ${name}`)
       } else {
