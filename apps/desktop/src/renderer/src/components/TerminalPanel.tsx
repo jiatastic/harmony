@@ -3,7 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import type { AgentRun, AvailableAgent, TerminalSession } from '../../../shared/workbench'
+import type { AgentRun, AvailableAgent, TerminalLifecycleState, TerminalSession } from '../../../shared/workbench'
 
 const cursorIconUrl = new URL('../assets/agents/cursor.png', import.meta.url).href
 const codexIconUrl = new URL('../assets/agents/codex.png', import.meta.url).href
@@ -14,6 +14,7 @@ const geminiIconUrl = new URL('../assets/agents/gemini.svg', import.meta.url).hr
 interface TerminalPanelProps {
   workspacePath: string | null
   onOpenTerminalsChange?: (tabs: OpenTerminalTabSummary[]) => void
+  onActiveTerminalTabChange?: (tab: OpenTerminalTabSummary | null) => void
   requestedActiveTab?: { workspacePath: string; tabId: string; nonce: number } | null
 }
 
@@ -23,6 +24,9 @@ export interface OpenTerminalTabSummary {
   title: string
   status?: AgentRun['status']
   isAgent?: boolean
+  agentId?: string
+  sessionId?: string
+  externalSessionId?: string
 }
 
 type AgentViewMode = 'chat' | 'terminal'
@@ -63,6 +67,9 @@ type TerminalTab = {
   title: string
   customTitle?: boolean
   sessionId?: string
+  runtimeState?: TerminalLifecycleState
+  lastExitCode?: number
+  restartNonce?: number
   agent?: AvailableAgent
   agentRun?: AgentRun
   agentViewMode: AgentViewMode
@@ -81,6 +88,7 @@ type BrowserTab = {
 }
 
 type PanelTab = TerminalTab | BrowserTab
+type TerminalVisualStatus = AgentRun['status'] | 'exited' | 'destroyed'
 
 const TERMINAL_LAYOUT_KEY = 'harmony-terminal-layout-v1'
 
@@ -116,9 +124,9 @@ function loadTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, 
             title: tab.title,
             customTitle: tab.customTitle === true,
             agent: tab.agent,
-            // Chat UI is temporarily hidden, so agent tabs always open in raw terminal mode.
-            agentViewMode: 'terminal',
-            chatMessages: []
+            agentViewMode: tab.agent ? (tab.agentViewMode ?? 'terminal') : 'terminal',
+            chatMessages: [],
+            lastKnownStatus: tab.lastKnownStatus
           })
           continue
         }
@@ -167,7 +175,8 @@ function saveTerminalLayout(tabs: PanelTab[], activeTabIds: Record<string, strin
             title: tab.title,
             customTitle: tab.customTitle === true,
             agent: tab.agent,
-            agentViewMode: tab.agent ? tab.agentViewMode : undefined
+            agentViewMode: tab.agent ? tab.agentViewMode : undefined,
+            lastKnownStatus: tab.lastKnownStatus
           }
         : {
             id: tab.id,
@@ -192,52 +201,44 @@ function saveTerminalLayout(tabs: PanelTab[], activeTabIds: Record<string, strin
   }
 }
 
-const XTERM_LIGHT: ITheme = {
-  background: '#ffffff',
-  foreground: '#383a42',
-  cursor: '#526eff',
-  cursorAccent: '#ffffff',
-  selectionBackground: 'rgba(0,0,0,0.08)',
-  selectionForeground: '#383a42',
-  black: '#383a42',
-  red: '#e45649',
-  green: '#50a14f',
-  yellow: '#c18401',
-  blue: '#4078f2',
-  magenta: '#a626a4',
-  cyan: '#0184bc',
-  white: '#a0a1a7',
-  brightBlack: '#696c77',
-  brightRed: '#e06c75',
-  brightGreen: '#98c379',
-  brightYellow: '#e5c07b',
-  brightBlue: '#61afef',
-  brightMagenta: '#c678dd',
-  brightCyan: '#56b6c2',
-  brightWhite: '#fafafa'
+function cssVar(name: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
 }
 
-const XTERM_DARK: ITheme = {
-  background: '#0a0a0a',
-  foreground: '#e0e0e0',
-  cursor: '#ffffff',
-  selectionBackground: 'rgba(255,255,255,0.15)',
-  black: '#0a0a0a',
-  red: '#ef4444',
-  green: '#3ecf8e',
-  yellow: '#f59e0b',
-  blue: '#3b82f6',
-  magenta: '#a855f7',
-  cyan: '#06b6d4',
-  white: '#e0e0e0',
-  brightBlack: '#555555',
-  brightRed: '#f87171',
-  brightGreen: '#4ade80',
-  brightYellow: '#fbbf24',
-  brightBlue: '#60a5fa',
-  brightMagenta: '#c084fc',
-  brightCyan: '#22d3ee',
-  brightWhite: '#ffffff'
+function terminalTheme(): ITheme {
+  const background = cssVar('--background', isDarkMode() ? '#0a0a0a' : '#ffffff')
+  const foreground = cssVar('--foreground', isDarkMode() ? '#e0e0e0' : '#383a42')
+  const primary = cssVar('--primary', isDarkMode() ? '#ffffff' : '#526eff')
+  const secondary = cssVar('--secondary', isDarkMode() ? '#3b82f6' : '#4078f2')
+  const accent = cssVar('--accent', isDarkMode() ? '#a855f7' : '#a626a4')
+  const muted = cssVar('--muted-foreground', isDarkMode() ? '#94a3b8' : '#696c77')
+  const destructive = cssVar('--destructive', isDarkMode() ? '#ef4444' : '#e45649')
+
+  return {
+    background,
+    foreground,
+    cursor: primary,
+    cursorAccent: background,
+    selectionBackground: isDarkMode() ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.08)',
+    selectionForeground: foreground,
+    black: background,
+    red: destructive,
+    green: cssVar('--chart-3', isDarkMode() ? '#4ade80' : '#50a14f'),
+    yellow: cssVar('--chart-5', isDarkMode() ? '#fbbf24' : '#c18401'),
+    blue: secondary,
+    magenta: accent,
+    cyan: cssVar('--chart-2', isDarkMode() ? '#22d3ee' : '#0184bc'),
+    white: foreground,
+    brightBlack: muted,
+    brightRed: destructive,
+    brightGreen: cssVar('--chart-3', isDarkMode() ? '#86efac' : '#98c379'),
+    brightYellow: cssVar('--chart-5', isDarkMode() ? '#fde68a' : '#e5c07b'),
+    brightBlue: cssVar('--ring', isDarkMode() ? '#93c5fd' : '#61afef'),
+    brightMagenta: cssVar('--accent', isDarkMode() ? '#c084fc' : '#c678dd'),
+    brightCyan: cssVar('--chart-2', isDarkMode() ? '#67e8f9' : '#56b6c2'),
+    brightWhite: cssVar('--card', isDarkMode() ? '#ffffff' : '#fafafa')
+  }
 }
 
 function isDarkMode(): boolean {
@@ -644,8 +645,10 @@ interface TerminalHostProps {
   tabId: string
   workspacePath: string
   visible: boolean
+  restartNonce?: number
   agent?: AvailableAgent
   onSessionChange?: (sessionId: string | null) => void
+  onRuntimeStateChange?: (state: TerminalLifecycleState, exitCode?: number) => void
   onTitleChange?: (title: string) => void
   onOutputData?: (data: string) => void
   onInputData?: (data: string) => void
@@ -655,8 +658,10 @@ function TerminalHost({
   tabId,
   workspacePath,
   visible,
+  restartNonce,
   agent,
   onSessionChange,
+  onRuntimeStateChange,
   onTitleChange,
   onOutputData,
   onInputData
@@ -668,6 +673,7 @@ function TerminalHost({
   const didStartAgentRef = useRef(false)
   const wheelRemainderRef = useRef(0)
   const onSessionChangeRef = useRef(onSessionChange)
+  const onRuntimeStateChangeRef = useRef(onRuntimeStateChange)
   const onTitleChangeRef = useRef(onTitleChange)
   const onOutputDataRef = useRef(onOutputData)
   const onInputDataRef = useRef(onInputData)
@@ -682,6 +688,10 @@ function TerminalHost({
   useEffect(() => {
     onSessionChangeRef.current = onSessionChange
   }, [onSessionChange])
+
+  useEffect(() => {
+    onRuntimeStateChangeRef.current = onRuntimeStateChange
+  }, [onRuntimeStateChange])
 
   useEffect(() => {
     onTitleChangeRef.current = onTitleChange
@@ -700,18 +710,19 @@ function TerminalHost({
 
     let cancelled = false
     const host = hostRef.current
+    didStartAgentRef.current = false
     const term = new Terminal({
       allowTransparency: true,
       convertEol: true,
       cursorBlink: true,
       cursorStyle: 'block',
       cursorInactiveStyle: 'outline',
-      fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, monospace",
+      fontFamily: `${cssVar('--font-mono', "'Fira Code', monospace")}, 'SF Mono', Menlo, monospace`,
       fontSize: 13,
       fontWeight: '600',
       lineHeight: 1.4,
       scrollback: 5000,
-      theme: isDarkMode() ? XTERM_DARK : XTERM_LIGHT
+      theme: terminalTheme()
     })
 
     const fit = new FitAddon()
@@ -775,6 +786,18 @@ function TerminalHost({
     const offExit = window.api.onTerminalExit((ev) => {
       if (ev.sessionId === sessionRef.current?.sessionId) {
         term.writeln(`\r\n[exited ${ev.exitCode}]`)
+        window.api.detachTerminal(ev.sessionId)
+      }
+    })
+
+    const offState = window.api.onTerminalState((ev) => {
+      if (ev.sessionId !== sessionRef.current?.sessionId) {
+        return
+      }
+
+      onRuntimeStateChangeRef.current?.(ev.state, ev.exitCode)
+
+      if (ev.state !== 'running') {
         sessionRef.current = null
         onSessionChangeRef.current?.(null)
       }
@@ -801,16 +824,18 @@ function TerminalHost({
       .createTerminal({
         cwd: workspacePath,
         themeHint: isDarkMode() ? 'dark' : 'light',
+        sessionKey: tabId,
         persistentId: agent ? undefined : tabId,
         initialCommand: agent?.command
       })
       .then((session) => {
         if (cancelled) {
-          window.api.destroyTerminal(session.sessionId)
+          window.api.detachTerminal(session.sessionId)
           return
         }
         sessionRef.current = session
         onSessionChangeRef.current?.(session.sessionId)
+        onRuntimeStateChangeRef.current?.(session.state, session.exitCode)
         fit.fit()
         window.api.resizeTerminal(session.sessionId, term.cols, term.rows)
         focusTerminal()
@@ -840,7 +865,8 @@ function TerminalHost({
       })
 
     const themeObserver = new MutationObserver(() => {
-      term.options.theme = isDarkMode() ? XTERM_DARK : XTERM_LIGHT
+      term.options.fontFamily = `${cssVar('--font-mono', "'Fira Code', monospace")}, 'SF Mono', Menlo, monospace`
+      term.options.theme = terminalTheme()
     })
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -853,12 +879,13 @@ function TerminalHost({
       ro.disconnect()
       offData()
       offExit()
+      offState()
       inputOff.dispose()
       resizeOff.dispose()
       titleOff.dispose()
       host.removeEventListener('pointerdown', handlePointerDown)
       const s = sessionRef.current
-      if (s) window.api.destroyTerminal(s.sessionId)
+      if (s) window.api.detachTerminal(s.sessionId)
       onSessionChangeRef.current?.(null)
       sessionRef.current = null
       fitRef.current = null
@@ -866,7 +893,7 @@ function TerminalHost({
       wheelRemainderRef.current = 0
       term.dispose()
     }
-  }, [agent?.command, agent?.name, tabId, workspacePath])
+  }, [agent?.command, agent?.name, restartNonce, tabId, workspacePath])
 
   useEffect(() => {
     if (visible) {
@@ -883,6 +910,7 @@ function TerminalHost({
 export function TerminalPanel({
   workspacePath,
   onOpenTerminalsChange,
+  onActiveTerminalTabChange,
   requestedActiveTab
 }: TerminalPanelProps): React.JSX.Element {
   const [tabs, setTabs] = useState<PanelTab[]>(() => loadTerminalLayout().tabs)
@@ -906,7 +934,11 @@ export function TerminalPanel({
   const firstTerminalWorkspace =
     currentWorkspaceTabs.find((tab) => tab.type === 'terminal')?.workspacePath ?? ''
 
-  const terminalStatus = useCallback((tab: TerminalTab): AgentRun['status'] | undefined => {
+  const terminalStatus = useCallback((tab: TerminalTab): TerminalVisualStatus | undefined => {
+    if (tab.runtimeState === 'exited' || tab.runtimeState === 'destroyed') {
+      return tab.runtimeState
+    }
+
     if (!tab.agent) {
       return undefined
     }
@@ -1078,10 +1110,42 @@ export function TerminalPanel({
           workspacePath: tab.workspacePath,
           title: tab.title,
           status: tab.agent ? (tab.agentRun?.status ?? tab.lastKnownStatus) : undefined,
-          isAgent: Boolean(tab.agent)
+          isAgent: Boolean(tab.agent),
+          agentId: tab.agent?.id,
+          sessionId: tab.sessionId,
+          externalSessionId: tab.agentRun?.externalSessionId
         }))
     )
   }, [onOpenTerminalsChange, tabs])
+
+  useEffect(() => {
+    if (!workspacePath) {
+      onActiveTerminalTabChange?.(null)
+      return
+    }
+
+    const activeTab = tabs.find(
+      (tab): tab is TerminalTab =>
+        tab.type === 'terminal' &&
+        tab.workspacePath === workspacePath &&
+        tab.id === (activeTabIds[workspacePath] ?? null)
+    )
+
+    onActiveTerminalTabChange?.(
+      activeTab
+        ? {
+            id: activeTab.id,
+            workspacePath: activeTab.workspacePath,
+            title: activeTab.title,
+            status: activeTab.agent ? (activeTab.agentRun?.status ?? activeTab.lastKnownStatus) : undefined,
+            isAgent: Boolean(activeTab.agent),
+            agentId: activeTab.agent?.id,
+            sessionId: activeTab.sessionId,
+            externalSessionId: activeTab.agentRun?.externalSessionId
+          }
+        : null
+    )
+  }, [activeTabIds, onActiveTerminalTabChange, tabs, workspacePath])
 
   const bindSession = useCallback((tabId: string, sessionId: string | null): void => {
     setTabs((prev) =>
@@ -1092,6 +1156,23 @@ export function TerminalPanel({
       )
     )
   }, [])
+
+  const updateTerminalRuntimeState = useCallback(
+    (tabId: string, state: TerminalLifecycleState, exitCode?: number): void => {
+      setTabs((prev) =>
+        prev.map((tab) =>
+          tab.id === tabId && tab.type === 'terminal'
+            ? {
+                ...tab,
+                runtimeState: state,
+                lastExitCode: state === 'exited' ? exitCode : undefined
+              }
+            : tab
+        )
+      )
+    },
+    []
+  )
 
   const startRenameTab = useCallback((tab: PanelTab): void => {
     setRenamingTabId(tab.id)
@@ -1147,7 +1228,16 @@ export function TerminalPanel({
     const id = uuid()
     setTabs((prev) => [
       ...prev,
-      { id, type: 'terminal', workspacePath: cwd, title: leaf(cwd), agentViewMode: 'terminal', chatMessages: [] }
+      {
+        id,
+        type: 'terminal',
+        workspacePath: cwd,
+        title: leaf(cwd),
+        agentViewMode: 'terminal',
+        chatMessages: [],
+        runtimeState: 'running',
+        restartNonce: 0
+      }
     ])
     setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
   }, [firstTerminalWorkspace, workspacePath])
@@ -1185,7 +1275,9 @@ export function TerminalPanel({
           agent,
           agentViewMode: 'terminal',
           chatMessages: [],
-          lastKnownStatus: 'idle'
+          lastKnownStatus: 'running',
+          runtimeState: 'running',
+          restartNonce: 0
         }
       ])
       setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
@@ -1204,6 +1296,9 @@ export function TerminalPanel({
         }
 
         if (closing.type === 'terminal') {
+          if (closing.sessionId) {
+            window.api.destroyTerminal(closing.sessionId)
+          }
           window.api.destroyPersistentTerminal(closing.id)
         }
 
@@ -1224,6 +1319,27 @@ export function TerminalPanel({
     },
     []
   )
+
+  const restartTerminal = useCallback((id: string): void => {
+    delete terminalInputBuffersRef.current[id]
+    delete terminalEchoSuppressionsRef.current[id]
+    setTabs((prev) =>
+      prev.map((tab) =>
+        tab.id === id && tab.type === 'terminal'
+          ? {
+              ...tab,
+              sessionId: undefined,
+              runtimeState: undefined,
+              lastExitCode: undefined,
+              agentRun: undefined,
+              chatMessages: tab.agent ? [] : tab.chatMessages,
+              lastKnownStatus: tab.agent ? 'running' : tab.lastKnownStatus,
+              restartNonce: (tab.restartNonce ?? 0) + 1
+            }
+          : tab
+      )
+    )
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -1405,17 +1521,55 @@ export function TerminalPanel({
               <TerminalHost
                 tabId={tab.id}
                 workspacePath={tab.workspacePath}
-                visible={
-                  tab.workspacePath === workspacePath &&
-                  tab.id === activeId &&
-                  (!tab.agent || tab.agentViewMode === 'terminal')
-                }
+                restartNonce={tab.restartNonce}
+                visible={tab.workspacePath === workspacePath && tab.id === activeId}
                 agent={tab.agent}
                 onSessionChange={(sessionId) => bindSession(tab.id, sessionId)}
+                onRuntimeStateChange={(state, exitCode) =>
+                  updateTerminalRuntimeState(tab.id, state, exitCode)
+                }
                 onTitleChange={(title) => updateTerminalTitle(tab.id, title)}
                 onOutputData={(data) => appendAgentOutput(tab.id, data)}
                 onInputData={(data) => handleTerminalInputChunk(tab.id, data)}
               />
+              {(tab.runtimeState === 'exited' || tab.runtimeState === 'destroyed') && (
+                <div className="terminal-exit-overlay">
+                  <div className="terminal-exit-card">
+                    <div className="terminal-exit-title">
+                      {tab.runtimeState === 'destroyed' ? 'Terminal closed' : 'Terminal exited'}
+                    </div>
+                    <div className="terminal-exit-copy">
+                      {tab.runtimeState === 'destroyed' ? (
+                        'This session was explicitly closed and can be started again.'
+                      ) : tab.lastExitCode && tab.lastExitCode !== 0 ? (
+                        <>
+                          Exited with code <code>{tab.lastExitCode}</code>.
+                        </>
+                      ) : (
+                        <>
+                          Exit code: <code>{tab.lastExitCode ?? 0}</code>
+                        </>
+                      )}
+                    </div>
+                    <div className="terminal-exit-actions">
+                      <button
+                        type="button"
+                        className="terminal-exit-restart"
+                        onClick={() => restartTerminal(tab.id)}
+                      >
+                        {tab.agent ? 'Restart agent' : 'Restart'}
+                      </button>
+                      <button
+                        type="button"
+                        className="terminal-exit-dismiss"
+                        onClick={() => closeTab(tab.id)}
+                      >
+                        Close tab
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <BrowserPane
@@ -1431,7 +1585,7 @@ export function TerminalPanel({
 
       {currentWorkspaceTabs.length === 0 && (
         <div className="terminal-empty">
-          <p>No terminal. Open a tab to start in this workspace.</p>
+          <p>No session attached. Open a terminal tab to start in this workspace.</p>
         </div>
       )}
 

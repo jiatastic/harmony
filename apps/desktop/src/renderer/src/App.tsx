@@ -13,6 +13,7 @@ import type {
   GitAvailability,
   SessionStat,
   SkillMarketplaceItem,
+  WorkspaceDiffResult,
   WorkspaceChangesSnapshot,
   WorkspaceEntry,
   WorkspaceSnapshot,
@@ -134,6 +135,10 @@ function fmtInstalls(n: number): string {
   return String(n)
 }
 
+function isSupportedAgentId(value: string | undefined): value is 'opencode' | 'codex' {
+  return value === 'opencode' || value === 'codex'
+}
+
 function shouldConfirmRisk(risk: string): boolean {
   return risk === 'medium' || risk === 'high' || risk === 'critical' || risk === 'unknown'
 }
@@ -239,11 +244,13 @@ function QuotaMeter({
   label,
   usedPct,
   resetsAt,
+  resetLabel,
   subtitle
 }: {
   label: string
   usedPct: number
   resetsAt: number
+  resetLabel?: string
   subtitle?: string
 }): React.JSX.Element {
   const pct = Math.min(100, usedPct)
@@ -258,6 +265,9 @@ function QuotaMeter({
           </span>
           {resetsAt > 0 && (
             <span className="quota-meter-reset">resets {fmtResetIn(resetsAt)}</span>
+          )}
+          {resetsAt <= 0 && resetLabel && (
+            <span className="quota-meter-reset">{resetLabel}</span>
           )}
         </span>
       </div>
@@ -328,52 +338,53 @@ function CodexQuotaCard({ quota }: { quota: CodexQuota }): React.JSX.Element {
   )
 }
 
-function ClaudeWindowSummary({
-  label,
-  window
-}: {
-  label: string
-  window: ClaudeQuota['rolling5h']
-}): React.JSX.Element {
-  const totalTokens = window.totalInputTokens + window.totalOutputTokens + window.totalCacheTokens
-
-  return (
-    <div className="quota-meter">
-      <div className="quota-meter-header">
-        <span className="quota-meter-label">{label}</span>
-        <span className="quota-meter-right">
-          <span className="quota-meter-pct">{window.sessionCount} sessions</span>
-        </span>
-      </div>
-      <div className="quota-meter-sub">
-        {fmtTokens(totalTokens)} tokens
-        {window.totalCostUSD != null ? ` • $${window.totalCostUSD.toFixed(2)}` : ''}
-      </div>
-    </div>
-  )
-}
-
 function ClaudeQuotaCard({ quota }: { quota: ClaudeQuota }): React.JSX.Element {
+  const accountMeta = [quota.email, quota.organization, quota.loginMethod].filter(Boolean).join(' • ')
+
   return (
     <div className="quota-card">
       <div className="quota-card-header">
         <span className="quota-card-dot" style={{ background: AGENT_COLORS.claude }} aria-hidden="true" />
         <span className="quota-card-title">Claude Code</span>
-        <span className="quota-card-plan">LOCAL ESTIMATE</span>
+        <span className="quota-card-plan">{quota.planType.toUpperCase()}</span>
       </div>
 
-      <div className="quota-subscription-row">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.3" />
-          <path d="M8 4.8v3.4l2.3 1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <span className="quota-subscription-date">{quota.note}</span>
-      </div>
+      {accountMeta && (
+        <div className="quota-subscription-row">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="5" r="2.2" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M3.8 12.2c.9-1.7 2.4-2.6 4.2-2.6 1.8 0 3.3.9 4.2 2.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
+          <span className="quota-subscription-date">{accountMeta}</span>
+        </div>
+      )}
 
       <div className="quota-meters">
-        <ClaudeWindowSummary label="Recent 5h" window={quota.rolling5h} />
-        <ClaudeWindowSummary label="Recent 7d" window={quota.rolling7d} />
-        <ClaudeWindowSummary label="Recent 30d" window={quota.rolling30d} />
+        {quota.session && (
+          <QuotaMeter
+            label="Session"
+            usedPct={quota.session.usedPct}
+            resetsAt={quota.session.resetAt ?? 0}
+            resetLabel={quota.session.resetLabel}
+          />
+        )}
+        {quota.weekly && (
+          <QuotaMeter
+            label="Weekly"
+            usedPct={quota.weekly.usedPct}
+            resetsAt={quota.weekly.resetAt ?? 0}
+            resetLabel={quota.weekly.resetLabel}
+          />
+        )}
+        {quota.additionalLimits.map((limit) => (
+          <QuotaMeter
+            key={limit.name}
+            label={limit.name}
+            usedPct={limit.usedPct}
+            resetsAt={limit.resetAt ?? 0}
+            resetLabel={limit.resetLabel}
+          />
+        ))}
       </div>
     </div>
   )
@@ -415,16 +426,71 @@ function statusLabel(status: string): string {
   return code === '?' ? '??' : code
 }
 
+function diffLineClass(line: string): string {
+  if (line.startsWith('+++') || line.startsWith('---')) return 'is-file'
+  if (line.startsWith('@@')) return 'is-hunk'
+  if (line.startsWith('+')) return 'is-added'
+  if (line.startsWith('-')) return 'is-removed'
+  if (
+    line.startsWith('diff --git') ||
+    line.startsWith('index ') ||
+    line.startsWith('Staged changes') ||
+    line.startsWith('Unstaged changes')
+  ) {
+    return 'is-meta'
+  }
+  return ''
+}
+
+function buildDiffViewLines(diff: string): Array<{ text: string; className: string; left: number | null; right: number | null }> {
+  let leftLine: number | null = null
+  let rightLine: number | null = null
+
+  return diff.split('\n').map((line) => {
+    const className = diffLineClass(line)
+    let left: number | null = null
+    let right: number | null = null
+
+    const hunkMatch = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
+    if (hunkMatch) {
+      leftLine = Number(hunkMatch[1])
+      rightLine = Number(hunkMatch[2])
+      return { text: line, className, left, right }
+    }
+
+    if (className === 'is-added' && !line.startsWith('+++')) {
+      right = rightLine
+      rightLine = rightLine == null ? null : rightLine + 1
+      return { text: line, className, left, right }
+    }
+
+    if (className === 'is-removed' && !line.startsWith('---')) {
+      left = leftLine
+      leftLine = leftLine == null ? null : leftLine + 1
+      return { text: line, className, left, right }
+    }
+
+    if (!className && line) {
+      left = leftLine
+      right = rightLine
+      leftLine = leftLine == null ? null : leftLine + 1
+      rightLine = rightLine == null ? null : rightLine + 1
+    }
+
+    return { text: line, className, left, right }
+  })
+}
+
 function groupChangesByDir(
   changes: WorkspaceChangesSnapshot['changes']
-): Array<{ dir: string; files: Array<{ name: string; path: string; status: string }> }> {
-  const map = new Map<string, Array<{ name: string; path: string; status: string }>>()
+): Array<{ dir: string; files: Array<{ name: string; path: string; status: string; additions: number; deletions: number }> }> {
+  const map = new Map<string, Array<{ name: string; path: string; status: string; additions: number; deletions: number }>>()
   for (const c of changes) {
     const parts = c.path.split('/')
     const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : 'Root Path'
     const name = parts.at(-1) ?? c.path
     if (!map.has(dir)) map.set(dir, [])
-    map.get(dir)!.push({ name, path: c.path, status: c.status })
+    map.get(dir)!.push({ name, path: c.path, status: c.status, additions: c.additions, deletions: c.deletions })
   }
   return Array.from(map.entries())
     .sort(([a], [b]) => {
@@ -444,12 +510,21 @@ const EMPTY_WORKSPACE_CHANGES: WorkspaceChangesSnapshot = {
   publishRemote: null,
   changes: []
 }
+const EMPTY_WORKSPACE_DIFF: WorkspaceDiffResult = {
+  diff: '',
+  truncated: false
+}
 
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 480
 const DEFAULT_LEFT = 260
 const DEFAULT_RIGHT = 320
 const SIDEBAR_COLLAPSE_KEY = 'harmony-sidebar-collapsed'
+const DIFF_PANEL_MIN = 320
+const DIFF_PANEL_MAX = 900
+const DEFAULT_DIFF_WIDTH = 440
+const DIFF_PANEL_WIDTH_KEY = 'harmony-diff-panel-width'
+const DIFF_PANEL_COLLAPSED_KEY = 'harmony-diff-panel-collapsed'
 
 function loadSidebarWidths(): [number, number] {
   try {
@@ -472,6 +547,43 @@ function loadSidebarWidths(): [number, number] {
 function saveSidebarWidths(left: number, right: number): void {
   try {
     localStorage.setItem('harmony-sidebar-widths', JSON.stringify([left, right]))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadDiffPanelWidth(): number {
+  try {
+    const raw = localStorage.getItem(DIFF_PANEL_WIDTH_KEY)
+    const value = raw ? Number(raw) : NaN
+    if (!Number.isNaN(value)) {
+      return Math.max(DIFF_PANEL_MIN, Math.min(DIFF_PANEL_MAX, value))
+    }
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_DIFF_WIDTH
+}
+
+function saveDiffPanelWidth(width: number): void {
+  try {
+    localStorage.setItem(DIFF_PANEL_WIDTH_KEY, String(width))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadDiffPanelCollapsed(): boolean {
+  try {
+    return localStorage.getItem(DIFF_PANEL_COLLAPSED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function saveDiffPanelCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(DIFF_PANEL_COLLAPSED_KEY, String(collapsed))
   } catch {
     /* ignore */
   }
@@ -558,6 +670,10 @@ function saveHiddenWorktrees(worktrees: string[]): void {
 
 function clampSidebar(w: number): number {
   return Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, w))
+}
+
+function clampDiffPanel(w: number): number {
+  return Math.max(DIFF_PANEL_MIN, Math.min(DIFF_PANEL_MAX, w))
 }
 
 function leafPath(p: string): string {
@@ -816,9 +932,12 @@ function App(): React.JSX.Element {
     },
     [rightWidth]
   )
+
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null)
   const [selectedWt, setSelectedWt] = useState<string | null>(null)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null)
+  const [diffPanelWidth, setDiffPanelWidth] = useState(loadDiffPanelWidth)
   const [status, setStatus] = useState('Loading\u2026')
   const [rightTab, setRightTab] = useState<RightTab>('changes')
   const [commitMsg, setCommitMsg] = useState('')
@@ -827,6 +946,11 @@ function App(): React.JSX.Element {
   )
   const [workspaceChanges, setWorkspaceChanges] =
     useState<WorkspaceChangesSnapshot>(EMPTY_WORKSPACE_CHANGES)
+  const [workspaceDiff, setWorkspaceDiff] = useState<WorkspaceDiffResult>(EMPTY_WORKSPACE_DIFF)
+  const [isDiffLoading, setIsDiffLoading] = useState(false)
+  const [diffError, setDiffError] = useState<string | null>(null)
+  const [isChangesListCollapsed, setIsChangesListCollapsed] = useState(false)
+  const [isDiffCollapsed, setIsDiffCollapsed] = useState(loadDiffPanelCollapsed)
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null)
   const [marketplaceQuery, setMarketplaceQuery] = useState('')
   const [marketplaceResults, setMarketplaceResults] = useState<SkillMarketplaceItem[]>([])
@@ -845,18 +969,50 @@ function App(): React.JSX.Element {
   const [isPublishing, setIsPublishing] = useState(false)
   const [isGitActionPending, setIsGitActionPending] = useState(false)
   const [openTerminalTabs, setOpenTerminalTabs] = useState<OpenTerminalTabSummary[]>([])
+  const [activeTerminalTab, setActiveTerminalTab] = useState<OpenTerminalTabSummary | null>(null)
   const [requestedActiveTerminalTab, setRequestedActiveTerminalTab] = useState<{
     workspacePath: string
     tabId: string
     nonce: number
   } | null>(null)
   const wtRef = useRef<string | null>(null)
+  const fileRowRefs = useRef(new Map<string, HTMLButtonElement>())
+  const diffWidthRef = useRef(diffPanelWidth)
   const marketplaceSearchTimerRef = useRef<number | null>(null)
   const marketplaceSearchRequestRef = useRef(0)
+
+  const startResizeDiff = useCallback(
+    (e: React.MouseEvent): void => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startW = diffPanelWidth
+      const onMove = (ev: MouseEvent): void => {
+        const delta = startX - ev.clientX
+        setDiffPanelWidth(clampDiffPanel(startW + delta))
+      }
+      const onUp = (): void => {
+        window.removeEventListener('mousemove', onMove)
+        window.removeEventListener('mouseup', onUp)
+        saveDiffPanelWidth(diffWidthRef.current)
+      }
+      window.addEventListener('mousemove', onMove)
+      window.addEventListener('mouseup', onUp)
+    },
+    [diffPanelWidth]
+  )
 
   useEffect(() => {
     wtRef.current = selectedWt
   }, [selectedWt])
+
+  useEffect(() => {
+    diffWidthRef.current = diffPanelWidth
+    saveDiffPanelWidth(diffPanelWidth)
+  }, [diffPanelWidth])
+
+  useEffect(() => {
+    saveDiffPanelCollapsed(isDiffCollapsed)
+  }, [isDiffCollapsed])
 
   useEffect(() => {
     saveOpenedFolders(openedFolders)
@@ -932,7 +1088,16 @@ function App(): React.JSX.Element {
     let cancelled = false
 
     const fetchStats = (): void => {
-      void window.api.listSessionStats(selectedWt).then((rows) => {
+      void window.api.listSessionStats({
+        workspacePath: selectedWt,
+        activeHint:
+          activeTerminalTab?.externalSessionId && isSupportedAgentId(activeTerminalTab.agentId)
+            ? {
+                agent: activeTerminalTab.agentId,
+                externalSessionId: activeTerminalTab.externalSessionId
+              }
+            : undefined
+      }).then((rows) => {
         if (!cancelled) setSessionStats(rows)
       })
     }
@@ -943,7 +1108,7 @@ function App(): React.JSX.Element {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [selectedWt])
+  }, [activeTerminalTab?.agentId, activeTerminalTab?.externalSessionId, selectedWt])
 
   // Poll usage summary every 60 s
   useEffect(() => {
@@ -996,6 +1161,56 @@ function App(): React.JSX.Element {
 
     void refreshChanges(selectedWt)
   }, [refreshChanges, selectedWt])
+
+  useEffect(() => {
+    if (!selectedWt || !activeChanges.isGitRepo || activeChanges.changes.length === 0) {
+      setSelectedChangePath(null)
+      setWorkspaceDiff(EMPTY_WORKSPACE_DIFF)
+      setDiffError(null)
+      return
+    }
+
+    if (!selectedChangePath || !activeChanges.changes.some((change) => change.path === selectedChangePath)) {
+      setSelectedChangePath(activeChanges.changes[0]?.path ?? null)
+    }
+  }, [activeChanges.changes, activeChanges.isGitRepo, selectedChangePath, selectedWt])
+
+  useEffect(() => {
+    if (!selectedWt || !selectedChangePath) {
+      setWorkspaceDiff(EMPTY_WORKSPACE_DIFF)
+      setDiffError(null)
+      setIsDiffLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setIsDiffLoading(true)
+    setDiffError(null)
+
+    void window.api
+      .getWorkspaceDiff({
+        workspacePath: selectedWt,
+        path: selectedChangePath
+      })
+      .then((result) => {
+        if (cancelled) return
+        setWorkspaceDiff(result)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setWorkspaceDiff(EMPTY_WORKSPACE_DIFF)
+        setDiffError(err instanceof Error ? err.message : 'Failed to load diff')
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsDiffLoading(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedChangePath, selectedWt])
 
   useEffect(() => {
     if (!selectedWt) {
@@ -1462,11 +1677,36 @@ function App(): React.JSX.Element {
     () => groupChangesByDir(activeChanges.changes),
     [activeChanges.changes]
   )
+  const changePaths = useMemo(
+    () => groupedChanges.flatMap((group) => group.files.map((file) => file.path)),
+    [groupedChanges]
+  )
+  const diffViewLines = useMemo(() => buildDiffViewLines(workspaceDiff.diff), [workspaceDiff.diff])
   const groupedSkills = useMemo(
     () => groupSkillsBySource(contextInfo?.skills ?? []),
     [contextInfo]
   )
   const subagentsList = contextInfo?.subagents ?? []
+  const activeSessionStat = useMemo(() => {
+    if (!activeTerminalTab?.isAgent) {
+      return null
+    }
+
+    if (!isSupportedAgentId(activeTerminalTab.agentId) || !activeTerminalTab.externalSessionId) {
+      return null
+    }
+
+    return (
+      sessionStats.find(
+        (session) =>
+          session.agent === activeTerminalTab.agentId &&
+          session.id === activeTerminalTab.externalSessionId
+      ) ??
+      sessionStats[0] ??
+      null
+    )
+  }, [activeTerminalTab, sessionStats])
+  const contextWindowCount = activeSessionStat ? 1 : 0
 
   const toggleAccordion = useCallback((id: string): void => {
     setOpenAccordions((prev) => {
@@ -1476,6 +1716,29 @@ function App(): React.JSX.Element {
       return next
     })
   }, [])
+
+  const handleChangeRowKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>, path: string): void => {
+      const currentIndex = changePaths.indexOf(path)
+      if (currentIndex === -1) return
+
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const delta = event.key === 'ArrowDown' ? 1 : -1
+        const nextPath = changePaths[currentIndex + delta]
+        if (!nextPath) return
+        setSelectedChangePath(nextPath)
+        fileRowRefs.current.get(nextPath)?.focus()
+        return
+      }
+
+      if (event.key === 'Enter' && selectedWt) {
+        event.preventDefault()
+        openFile(selectedWt, path)
+      }
+    },
+    [changePaths, openFile, selectedWt]
+  )
 
   const handleUpdateAction = useCallback((): void => {
     if (updateState.phase === 'available') {
@@ -1565,6 +1828,15 @@ function App(): React.JSX.Element {
     setCollapsedSidebars((prev) => ({ ...prev, right: !prev.right }))
   }, [])
 
+  const toggleDiffPanel = useCallback((): void => {
+    setIsDiffCollapsed((value) => !value)
+  }, [])
+
+  const openDiffPanelForChange = useCallback((path: string): void => {
+    setSelectedChangePath(path)
+    setIsDiffCollapsed(false)
+  }, [])
+
   const layoutStyle = useMemo((): React.CSSProperties | undefined => {
     if (isNarrow) {
       const rows: string[] = []
@@ -1579,11 +1851,11 @@ function App(): React.JSX.Element {
 
     const columns: string[] = []
     if (!isLeftCollapsed) {
-      columns.push(`${leftWidth}px`, '4px')
+      columns.push(`${leftWidth}px`, '1px')
     }
     columns.push('minmax(0, 1fr)')
     if (!isRightCollapsed) {
-      columns.push('4px', `${rightWidth}px`)
+      columns.push('1px', `${rightWidth}px`)
     }
     return {
       gridTemplateColumns: columns.join(' ')
@@ -1729,11 +2001,83 @@ function App(): React.JSX.Element {
 
         {/* ── Center: Terminal ── */}
         <div className="panel-center">
-          <TerminalPanel
-            workspacePath={selectedWt}
-            requestedActiveTab={requestedActiveTerminalTab}
-            onOpenTerminalsChange={setOpenTerminalTabs}
-          />
+          <div className="center-split">
+            <div className="center-main">
+              <TerminalPanel
+                workspacePath={selectedWt}
+                requestedActiveTab={requestedActiveTerminalTab}
+                onOpenTerminalsChange={setOpenTerminalTabs}
+                onActiveTerminalTabChange={setActiveTerminalTab}
+              />
+            </div>
+
+            {!isNarrow && !isDiffCollapsed && (
+              <div
+                className="resize-handle resize-handle-diff"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize diff panel"
+                tabIndex={0}
+                onMouseDown={startResizeDiff}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    e.preventDefault()
+                    const delta = e.key === 'ArrowLeft' ? 12 : -12
+                    const next = clampDiffPanel(diffPanelWidth + delta)
+                    setDiffPanelWidth(next)
+                    saveDiffPanelWidth(next)
+                  }
+                }}
+              />
+            )}
+
+            {!isDiffCollapsed && (
+              <aside className="panel-diff" style={!isNarrow ? { width: diffPanelWidth } : undefined}>
+                <div className="diff-pane-header">
+                  <div className="diff-pane-title">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                    <span className="sc-section-label">Diff</span>
+                    {selectedChangePath && (
+                      <span className="sc-section-path" title={selectedChangePath}>
+                        {selectedChangePath}
+                      </span>
+                    )}
+                    {isDiffLoading && workspaceDiff.diff && <span className="sc-section-loading">Updating…</span>}
+                    {workspaceDiff.truncated && <span className="sc-section-count">Truncated</span>}
+                  </div>
+                  <button
+                    className="diff-pane-close"
+                    type="button"
+                    aria-label="Close diff panel"
+                    onClick={toggleDiffPanel}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </div>
+                {isDiffLoading && !workspaceDiff.diff ? (
+                  <div className="sc-diff-empty">Loading diff…</div>
+                ) : diffError ? (
+                  <div className="sc-diff-empty">{diffError}</div>
+                ) : workspaceDiff.diff ? (
+                  <div className="sc-diff-view" role="region" aria-label="Selected file diff">
+                    {diffViewLines.map((line, index) => (
+                      <div key={`${index}-${line.text}`} className={`sc-diff-line ${line.className}`.trim()}>
+                        <span className="sc-diff-ln">{line.left ?? ''}</span>
+                        <span className="sc-diff-ln">{line.right ?? ''}</span>
+                        <span className="sc-diff-text">{line.text || ' '}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="sc-diff-empty">Select a changed file to inspect its diff.</div>
+                )}
+              </aside>
+            )}
+          </div>
         </div>
 
         {!isNarrow && !isRightCollapsed && (
@@ -1891,45 +2235,106 @@ function App(): React.JSX.Element {
                 ) : changesCount === 0 ? (
                   <div className="empty-state">Working tree is clean.</div>
                 ) : (
-                  <div className="sc-file-list">
-                    <div className="sc-section-hd">
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                        <path d="M1 4h14M1 8h14M1 12h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                      </svg>
-                      <span className="sc-section-label">Changes</span>
-                      <span className="sc-section-count">{changesCount}</span>
-                      <div className="sc-section-spacer" />
-                      <button
-                        className="sc-tool-btn"
-                        type="button"
-                        aria-label="Stage all changes"
-                        disabled={isStagingChanges || changesCount === 0}
-                        onClick={() => void handleStageAllChanges()}
-                      >
+                  <div className={`sc-file-list-panel${isChangesListCollapsed ? ' is-collapsed' : ''}`}>
+                      <div className="sc-section-hd">
+                        <button
+                          className="sc-section-toggle"
+                          type="button"
+                          aria-expanded={!isChangesListCollapsed}
+                          onClick={() => setIsChangesListCollapsed((value) => !value)}
+                        >
                         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                          <path d="M8 2v10M3 7l5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          <path d="M1 4h14M1 8h14M1 12h14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
                         </svg>
-                      </button>
-                    </div>
+                        <span className="sc-section-label">Changes</span>
+                        <span className="sc-section-count">{changesCount}</span>
+                        <svg
+                          className={`sc-section-chevron${isChangesListCollapsed ? ' is-collapsed' : ''}`}
+                          width="12"
+                          height="12"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          aria-hidden="true"
+                        >
+                          <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        </button>
+                        <div className="sc-section-spacer" />
+                        <button
+                          className="sc-tool-btn"
+                          type="button"
+                          aria-label="Stage all changes"
+                          disabled={isStagingChanges || changesCount === 0}
+                          onClick={() => void handleStageAllChanges()}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                            <path d="M8 2v10M3 7l5 5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                      </div>
 
-                    {groupedChanges.map((group) => (
-                      <div key={group.dir} className="sc-dir-group">
-                        <div className="sc-dir-hd">
-                          <span className="sc-dir-name">{group.dir}</span>
-                          <span className="sc-dir-count">{group.files.length}</span>
-                        </div>
-                        {group.files.map((f) => (
-                          <div key={f.path} className="sc-file-row">
-                            <span
-                              className={`sc-status-dot sc-s-${statusToClass(f.status)}`}
-                              aria-label={statusLabel(f.status)}
-                            />
-                            <span className="sc-file-name">{f.name}</span>
-                            <span className="sc-file-badge">{statusLabel(f.status)}</span>
+                      {!isChangesListCollapsed && (
+                      <div className="sc-file-list-scroll">
+                        {groupedChanges.map((group) => (
+                          <div key={group.dir} className="sc-dir-group">
+                            <div className="sc-dir-hd">
+                              <span className="sc-dir-name">{group.dir}</span>
+                              <span className="sc-dir-count">{group.files.length}</span>
+                            </div>
+                            {group.files.map((f) => (
+                              <div
+                                key={f.path}
+                                className={`sc-file-row${selectedChangePath === f.path ? ' is-selected' : ''}`}
+                                title={f.path}
+                              >
+                                <button
+                                  type="button"
+                                  className="sc-file-main"
+                                  ref={(node) => {
+                                    if (node) {
+                                      fileRowRefs.current.set(f.path, node)
+                                    } else {
+                                      fileRowRefs.current.delete(f.path)
+                                    }
+                                  }}
+                                  onClick={() => setSelectedChangePath(f.path)}
+                                  onKeyDown={(event) => handleChangeRowKeyDown(event, f.path)}
+                                >
+                                  <span
+                                    className={`sc-status-dot sc-s-${statusToClass(f.status)}`}
+                                    aria-label={statusLabel(f.status)}
+                                  />
+                                  <span className="sc-file-name">{f.name}</span>
+                                  <span className="sc-file-stats" aria-label={`${f.additions} additions and ${f.deletions} deletions`}>
+                                    {f.additions > 0 && <span className="sc-file-additions">+{f.additions}</span>}
+                                    {f.deletions > 0 && <span className="sc-file-deletions">-{f.deletions}</span>}
+                                    {f.additions === 0 && f.deletions === 0 && <span className="sc-file-neutral">0</span>}
+                                  </span>
+                                </button>
+                                <span className="sc-file-actions">
+                                  {selectedWt && (
+                                    <button
+                                      className="sc-inline-icon"
+                                      type="button"
+                                      aria-label={`Show diff for ${f.name}`}
+                                      title={`Show diff for ${f.name}`}
+                                      onClick={() => openDiffPanelForChange(f.path)}
+                                    >
+                                      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                        <path d="M6 3.5h6.5V10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                        <path d="M10.5 3.5 4 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                                        <path d="M4.5 5.5V12h6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </span>
+                                <span className="sc-file-badge">{statusLabel(f.status)}</span>
+                              </div>
+                            ))}
                           </div>
                         ))}
                       </div>
-                    ))}
+                      )}
                   </div>
                 )}
               </div>
@@ -1960,28 +2365,67 @@ function App(): React.JSX.Element {
             {/* ── Inspector ── */}
             {rightTab === 'inspector' && (
               <div className="right-scroll">
+                <div className="inspector-actions">
+                  <button
+                    className="inspector-diff-btn"
+                    type="button"
+                    onClick={() => setIsDiffCollapsed(false)}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 4.5h10M3 8h10M3 11.5h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                    </svg>
+                    {isDiffCollapsed ? 'Open Diff Panel' : 'Diff Panel Open'}
+                  </button>
+                </div>
                 <div className="accord-list">
-                  {/* Context Window — recent OpenCode sessions */}
+                  {/* Context Window — active agent session */}
                   <AccordionSection
                     id="context"
                     label="Context Window"
-                    count={sessionStats.length}
+                    count={contextWindowCount}
                     open={openAccordions.has('context')}
                     onToggle={() => toggleAccordion('context')}
                   >
-                    {sessionStats.length === 0 ? (
-                      <div className="empty-state">No sessions found for this workspace.</div>
+                    {activeTerminalTab && (
+                      <div className="accord-item accord-item-session">
+                        <div className="session-row">
+                          <span className="session-title">Active Session</span>
+                          <span className="session-tokens">{activeTerminalTab.title}</span>
+                        </div>
+                        <div className="session-meta">
+                          <span className="session-agent">{activeTerminalTab.agentId ?? 'terminal'}</span>
+                          <span className="session-model">{activeTerminalTab.status ?? 'active'}</span>
+                        </div>
+                      </div>
+                    )}
+                    {!activeTerminalTab ? (
+                      <div className="empty-state">
+                        Select an active terminal tab to inspect its session context.
+                      </div>
+                    ) : !activeTerminalTab.isAgent ? (
+                      <div className="empty-state">
+                        Context window data is only available for the active AI agent session.
+                      </div>
+                    ) : !activeSessionStat ? (
+                      <div className="empty-state">
+                        No matching session context found for the active agent session yet.
+                      </div>
                     ) : (
-                      sessionStats.map((s) => {
-                        const total = s.inputTokens + s.outputTokens
+                      (() => {
+                        const total = activeSessionStat.inputTokens + activeSessionStat.outputTokens
                         const totalK = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total)
-                        const pct = s.contextWindow ? Math.min(100, (total / s.contextWindow) * 100) : null
-                        const ctxK = s.contextWindow ? `${(s.contextWindow / 1000).toFixed(0)}k` : null
+                        const pct = activeSessionStat.contextWindow
+                          ? Math.min(100, (total / activeSessionStat.contextWindow) * 100)
+                          : null
+                        const ctxK = activeSessionStat.contextWindow
+                          ? `${(activeSessionStat.contextWindow / 1000).toFixed(0)}k`
+                          : null
                         const barClass = pct === null ? '' : pct >= 80 ? ' is-danger' : pct >= 60 ? ' is-warn' : ' is-ok'
+
                         return (
-                          <div key={s.id} className="accord-item accord-item-session">
+                          <div key={activeSessionStat.id} className="accord-item accord-item-session">
                             <div className="session-row">
-                              <span className="session-title">{s.title || 'Untitled'}</span>
+                              <span className="session-title">{activeSessionStat.title || 'Untitled'}</span>
                               <span className="session-tokens">{totalK}{ctxK && <span className="session-ctx-max">/{ctxK}</span>}</span>
                             </div>
                             {pct !== null && (
@@ -1990,16 +2434,16 @@ function App(): React.JSX.Element {
                               </div>
                             )}
                             <div className="session-meta">
-                              <span className="session-agent">{s.agent}</span>
-                              <span className="session-model">{s.model || '—'}</span>
+                              <span className="session-agent">{activeSessionStat.agent}</span>
+                              <span className="session-model">{activeSessionStat.model || '—'}</span>
                               <span className="session-breakdown">
-                                ↑{(s.inputTokens / 1000).toFixed(1)}k&nbsp;↓{(s.outputTokens / 1000).toFixed(1)}k
-                                {s.cacheReadTokens > 0 && <>&nbsp;⚡{(s.cacheReadTokens / 1000).toFixed(1)}k</>}
+                                ↑{(activeSessionStat.inputTokens / 1000).toFixed(1)}k&nbsp;↓{(activeSessionStat.outputTokens / 1000).toFixed(1)}k
+                                {activeSessionStat.cacheReadTokens > 0 && <>&nbsp;⚡{(activeSessionStat.cacheReadTokens / 1000).toFixed(1)}k</>}
                               </span>
                             </div>
                           </div>
                         )
-                      })
+                      })()
                     )}
                   </AccordionSection>
 
@@ -2128,7 +2572,6 @@ function App(): React.JSX.Element {
                         >
                           <AccordItemGlyph iconUrl={server.iconUrl} />
                           <span className="accord-item-name">{server.id}</span>
-                          <span className="accord-item-chip">{server.transport}</span>
                           <span className={`accord-item-chip ${mcpStatusClass(server.status)}`}>
                             {mcpStatusLabel(server.status)}
                           </span>
@@ -2206,7 +2649,7 @@ function App(): React.JSX.Element {
                     <ClaudeQuotaCard quota={claudeQuota} />
                   ) : (
                     <div className="empty-state" style={{ padding: '12px 16px', fontSize: '11px' }}>
-                      Claude Code usage estimate unavailable — no recent local transcripts found.
+                      Claude Code subscription usage unavailable — connect Claude Code and make sure <code>claude /usage</code> works.
                     </div>
                   )}
                 </div>

@@ -135,6 +135,43 @@ function normalizeBranch(rawBranch: string | undefined): string {
   return rawBranch.replace(/^refs\/heads\//, '')
 }
 
+function normalizeChangePath(path: string): string {
+  const renamedMarker = path.lastIndexOf(' -> ')
+  return renamedMarker === -1 ? path.trim() : path.slice(renamedMarker + 4).trim()
+}
+
+async function getWorkspaceChangeStats(rootPath: string): Promise<Map<string, { additions: number; deletions: number }>> {
+  const stats = new Map<string, { additions: number; deletions: number }>()
+
+  const merge = (path: string, additionsRaw: string, deletionsRaw: string): void => {
+    const key = normalizeChangePath(path)
+    if (!key) return
+    const current = stats.get(key) ?? { additions: 0, deletions: 0 }
+    current.additions += additionsRaw === '-' ? 0 : Number(additionsRaw) || 0
+    current.deletions += deletionsRaw === '-' ? 0 : Number(deletionsRaw) || 0
+    stats.set(key, current)
+  }
+
+  const parseNumstat = (output: string): void => {
+    for (const line of output.split('\n').map((value) => value.trim()).filter(Boolean)) {
+      const [additionsRaw = '0', deletionsRaw = '0', ...pathParts] = line.split('\t')
+      const path = pathParts.join('\t').trim()
+      if (!path) continue
+      merge(path, additionsRaw, deletionsRaw)
+    }
+  }
+
+  const [staged, unstaged] = await Promise.all([
+    runGit(['diff', '--cached', '--numstat', '--no-ext-diff'], rootPath).catch(() => ''),
+    runGit(['diff', '--numstat', '--no-ext-diff'], rootPath).catch(() => '')
+  ])
+
+  parseNumstat(staged)
+  parseNumstat(unstaged)
+
+  return stats
+}
+
 function sanitizeBranchName(branch: string): string {
   return branch
     .trim()
@@ -381,7 +418,10 @@ async function listWorkspaceChanges(workspacePath: string): Promise<WorkspaceCha
     }
   }
 
-  const output = await runGit(['status', '--porcelain=v1', '--branch', '--untracked-files=all'], rootPath)
+  const [output, changeStats] = await Promise.all([
+    runGit(['status', '--porcelain=v1', '--branch', '--untracked-files=all'], rootPath),
+    getWorkspaceChangeStats(rootPath)
+  ])
   const branchState = parseBranchSnapshot(output)
   const remotes = await listGitRemotes(rootPath)
   const publishRemote =
@@ -392,10 +432,17 @@ async function listWorkspaceChanges(workspacePath: string): Promise<WorkspaceCha
     .split('\n')
     .map((line) => line.trimEnd())
     .filter((line) => Boolean(line) && !line.startsWith('## '))
-    .map((line) => ({
-      status: line.slice(0, 2).trim() || '??',
-      path: line.slice(3).trim()
-    }))
+    .map((line) => {
+      const path = line.slice(3).trim()
+      const normalizedPath = normalizeChangePath(path)
+      const stat = changeStats.get(normalizedPath) ?? { additions: 0, deletions: 0 }
+      return {
+        status: line.slice(0, 2).trim() || '??',
+        path,
+        additions: stat.additions,
+        deletions: stat.deletions
+      }
+    })
 
   return {
     isGitRepo: true,

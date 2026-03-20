@@ -9,7 +9,9 @@ import type {
   GenerateCommitMessageResult,
   GitActionResult,
   PublishBranchPayload,
-  StageChangesPayload
+  StageChangesPayload,
+  WorkspaceDiffPayload,
+  WorkspaceDiffResult
 } from '../shared/workbench'
 import { harmonyChannels } from '../shared/workbench'
 import { ensureBundledSkillsInstalled, getBundledCommitMessageSkill } from './bundledSkills'
@@ -20,6 +22,7 @@ const PUSH_TIMEOUT_MS = 120_000
 const AI_TIMEOUT_MS = 120_000
 const MAX_BUFFER_BYTES = 8 * 1024 * 1024
 const MAX_DIFF_SECTION_CHARS = 12_000
+const MAX_DIFF_PREVIEW_CHARS = 120_000
 
 function runCommand(
   command: string,
@@ -81,6 +84,20 @@ function truncateSection(content: string, maxChars = MAX_DIFF_SECTION_CHARS): st
   return `${content.slice(0, maxChars)}\n[truncated ${content.length - maxChars} chars]`
 }
 
+function truncateDiffPreview(content: string, maxChars = MAX_DIFF_PREVIEW_CHARS): WorkspaceDiffResult {
+  if (content.length <= maxChars) {
+    return {
+      diff: content,
+      truncated: false
+    }
+  }
+
+  return {
+    diff: `${content.slice(0, maxChars)}\n\n[Diff truncated: ${content.length - maxChars} more characters]`,
+    truncated: true
+  }
+}
+
 function sanitizeCommitMessage(rawMessage: string): string {
   const candidate = rawMessage
     .replace(/^```[\w-]*\s*/g, '')
@@ -104,6 +121,11 @@ function parseStatusEntries(statusOutput: string): Array<{ path: string; status:
       status: line.slice(0, 2).trim() || '??',
       path: line.slice(3).trim()
     }))
+}
+
+function normalizeDiffPath(path: string): string {
+  const renamedMarker = path.lastIndexOf(' -> ')
+  return renamedMarker === -1 ? path.trim() : path.slice(renamedMarker + 4).trim()
 }
 
 function inferCommitType(files: Array<{ path: string; status: string }>): string {
@@ -267,11 +289,16 @@ async function stageWorkspaceChanges(payload: StageChangesPayload): Promise<GitA
   const cwd = await ensureGitWorkspaceRoot(payload.workspacePath)
   const branch = await runGit(['branch', '--show-current'], cwd).then((value) => value || 'detached')
 
-  await runGit(['add', '--all'], cwd)
+  const path = String(payload.path ?? '').trim()
+  if (path) {
+    await runGit(['add', '--', path], cwd)
+  } else {
+    await runGit(['add', '--all'], cwd)
+  }
 
   return {
     branch,
-    summary: 'Staged all workspace changes.'
+    summary: path ? `Staged ${path}.` : 'Staged all workspace changes.'
   }
 }
 
@@ -415,6 +442,33 @@ async function generateCommitMessage(
   }
 }
 
+async function getWorkspaceDiff(payload: WorkspaceDiffPayload): Promise<WorkspaceDiffResult> {
+  const cwd = await ensureGitWorkspaceRoot(payload.workspacePath)
+  const gitPath = normalizeDiffPath(String(payload.path ?? '').trim())
+
+  if (!gitPath) {
+    throw new Error('A file path is required to load a diff.')
+  }
+
+  const sections: string[] = []
+
+  if (payload.staged !== false) {
+    const stagedDiff = await runGit(['diff', '--cached', '--no-ext-diff', '--', gitPath], cwd).catch(() => '')
+    if (stagedDiff) {
+      sections.push(payload.staged == null ? `Staged changes\n${stagedDiff}` : stagedDiff)
+    }
+  }
+
+  if (payload.staged !== true) {
+    const unstagedDiff = await runGit(['diff', '--no-ext-diff', '--', gitPath], cwd).catch(() => '')
+    if (unstagedDiff) {
+      sections.push(payload.staged == null ? `Unstaged changes\n${unstagedDiff}` : unstagedDiff)
+    }
+  }
+
+  return truncateDiffPreview(sections.join('\n\n').trim())
+}
+
 export function registerSourceControlIpc(): void {
   ipcMain.handle(harmonyChannels.stageWorkspaceChanges, (_event, payload: StageChangesPayload) =>
     stageWorkspaceChanges(payload)
@@ -427,5 +481,8 @@ export function registerSourceControlIpc(): void {
   )
   ipcMain.handle(harmonyChannels.generateCommitMessage, (_event, payload: GenerateCommitMessagePayload) =>
     generateCommitMessage(payload)
+  )
+  ipcMain.handle(harmonyChannels.getWorkspaceDiff, (_event, payload: WorkspaceDiffPayload) =>
+    getWorkspaceDiff(payload)
   )
 }

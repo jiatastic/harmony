@@ -6,6 +6,7 @@ export interface BranchInfo {
   remoteRef?: string
 }
 export type AgentStatus = 'idle' | 'running' | 'waiting' | 'done' | 'error'
+export type TerminalLifecycleState = 'running' | 'exited' | 'destroyed'
 
 export interface SessionStat {
   id: string
@@ -19,6 +20,14 @@ export interface SessionStat {
   cacheReadTokens: number
   /** Model context window size in tokens (available for Codex) */
   contextWindow?: number
+}
+
+export interface SessionStatsRequest {
+  workspacePath: string
+  activeHint?: {
+    agent?: 'opencode' | 'codex'
+    externalSessionId?: string
+  }
 }
 
 export interface RateLimitWindow {
@@ -72,12 +81,28 @@ export interface ClaudeUsageWindow {
   totalCostUSD?: number
 }
 
+export interface ClaudeQuotaWindow {
+  usedPct: number
+  resetAt?: number
+  resetLabel?: string
+}
+
+export interface ClaudeQuotaLimit {
+  name: string
+  usedPct: number
+  resetAt?: number
+  resetLabel?: string
+}
+
 export interface ClaudeQuota {
-  source: 'local-estimate'
-  note: string
-  rolling5h: ClaudeUsageWindow
-  rolling7d: ClaudeUsageWindow
-  rolling30d: ClaudeUsageWindow
+  source: 'cli'
+  planType: string
+  email?: string
+  organization?: string
+  loginMethod?: string
+  session?: ClaudeQuotaWindow
+  weekly?: ClaudeQuotaWindow
+  additionalLimits: ClaudeQuotaLimit[]
 }
 
 export type AppUpdatePhase =
@@ -128,14 +153,17 @@ export const harmonyChannels = {
   commitWorkspaceChanges: 'git:commit',
   publishBranch: 'git:publish',
   generateCommitMessage: 'git:generateCommitMessage',
+  getWorkspaceDiff: 'git:workspaceDiff',
   createTerminal: 'terminal:create',
   writeTerminal: 'terminal:write',
   resizeTerminal: 'terminal:resize',
+  detachTerminal: 'terminal:detach',
   destroyTerminal: 'terminal:destroy',
   destroyPersistentTerminal: 'terminal:destroyPersistent',
   startAgent: 'agent:start',
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
+  terminalState: 'terminal:state',
   agentUpdate: 'agent:update',
   listSessionStats: 'context:sessions',
   getUsageSummary: 'usage:summary',
@@ -187,6 +215,8 @@ export interface WorkspaceSnapshot {
 export interface WorkspaceChange {
   path: string
   status: string
+  additions: number
+  deletions: number
 }
 
 export interface WorkspaceChangesSnapshot {
@@ -301,7 +331,9 @@ export interface GitActionPayload {
   workspacePath: string
 }
 
-export interface StageChangesPayload extends GitActionPayload {}
+export interface StageChangesPayload extends GitActionPayload {
+  path?: string
+}
 
 export interface CommitChangesPayload extends GitActionPayload {
   message: string
@@ -320,6 +352,16 @@ export interface GenerateCommitMessageResult {
   usedFallback: boolean
 }
 
+export interface WorkspaceDiffPayload extends GitActionPayload {
+  staged?: boolean
+  path?: string
+}
+
+export interface WorkspaceDiffResult {
+  diff: string
+  truncated: boolean
+}
+
 export interface GitActionResult {
   branch: string
   summary: string
@@ -328,6 +370,8 @@ export interface GitActionResult {
 export interface CreateTerminalPayload {
   cwd: string
   themeHint?: 'light' | 'dark'
+  /** Stable logical terminal identity, usually the renderer tab id */
+  sessionKey?: string
   persistentId?: string
   initialCommand?: string
 }
@@ -336,6 +380,10 @@ export interface TerminalSession {
   sessionId: string
   cwd: string
   shell: string
+  state: TerminalLifecycleState
+  attached: boolean
+  exitCode?: number
+  signal?: number
 }
 
 export interface AvailableAgent {
@@ -364,6 +412,13 @@ export interface TerminalExitEvent {
   signal?: number
 }
 
+export interface TerminalStateEvent {
+  sessionId: string
+  state: TerminalLifecycleState
+  exitCode?: number
+  signal?: number
+}
+
 export interface AgentStartPayload {
   sessionId: string
   workspacePath: string
@@ -377,6 +432,7 @@ export interface AgentRun {
   workspacePath: string
   command: string
   displayName: string
+  externalSessionId?: string
   status: AgentStatus
   startedAt: string
   finishedAt?: string
@@ -410,16 +466,19 @@ export interface HarmonyApi {
   commitWorkspaceChanges(payload: CommitChangesPayload): Promise<GitActionResult>
   publishBranch(payload: PublishBranchPayload): Promise<GitActionResult>
   generateCommitMessage(payload: GenerateCommitMessagePayload): Promise<GenerateCommitMessageResult>
+  getWorkspaceDiff(payload: WorkspaceDiffPayload): Promise<WorkspaceDiffResult>
   createTerminal(payload: CreateTerminalPayload): Promise<TerminalSession>
   writeTerminal(sessionId: string, data: string): void
   resizeTerminal(sessionId: string, cols: number, rows: number): void
+  detachTerminal(sessionId: string): void
   destroyTerminal(sessionId: string): void
   destroyPersistentTerminal(persistentId: string): void
   startAgent(payload: AgentStartPayload): Promise<AgentRun>
   onTerminalData(listener: (event: TerminalDataEvent) => void): () => void
   onTerminalExit(listener: (event: TerminalExitEvent) => void): () => void
+  onTerminalState(listener: (event: TerminalStateEvent) => void): () => void
   onAgentUpdate(listener: (event: AgentRun) => void): () => void
-  listSessionStats(workspacePath: string): Promise<SessionStat[]>
+  listSessionStats(payload: SessionStatsRequest): Promise<SessionStat[]>
   getUsageSummary(): Promise<AgentUsage[]>
   getCodexQuota(): Promise<CodexQuota | null>
   getClaudeQuota(): Promise<ClaudeQuota | null>

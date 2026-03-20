@@ -38,6 +38,7 @@ function publishUpdate(run: AgentRunRecord): void {
     workspacePath: run.workspacePath,
     command: run.command,
     displayName: run.displayName,
+    externalSessionId: run.externalSessionId,
     status: run.status,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
@@ -45,6 +46,33 @@ function publishUpdate(run: AgentRunRecord): void {
     signal: run.signal,
     message: run.message
   } satisfies AgentRun)
+}
+
+function inferAgentKind(run: AgentRunRecord): 'codex' | 'opencode' | null {
+  const command = run.command.toLowerCase()
+  const displayName = run.displayName.toLowerCase()
+  if (command.startsWith('codex') || displayName.includes('codex')) {
+    return 'codex'
+  }
+  if (command.startsWith('opencode') || displayName.includes('opencode')) {
+    return 'opencode'
+  }
+  return null
+}
+
+function extractExternalSessionId(run: AgentRunRecord, data: string): string | null {
+  const kind = inferAgentKind(run)
+  if (!kind) {
+    return null
+  }
+
+  if (kind === 'opencode') {
+    const match = data.match(/\bses_[A-Za-z0-9]+\b/)
+    return match?.[0] ?? null
+  }
+
+  const uuidMatch = data.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i)
+  return uuidMatch?.[0] ?? null
 }
 
 function inferDisplayName(command: string, displayName?: string): string {
@@ -188,13 +216,14 @@ async function startAgentRun(
     workspacePath: payload.workspacePath,
     command,
     displayName: inferDisplayName(command, payload.displayName),
-    status: 'idle',
+    externalSessionId: undefined,
+    status: 'running',
     startedAt: new Date().toISOString(),
     ownerId: event.sender.id,
     recentOutput: '',
-    message: 'Agent is ready.',
+    message: 'Agent is starting.',
     currentInputLine: '',
-    awaitingResponse: false,
+    awaitingResponse: true,
     sawOutputSincePrompt: false
   }
 
@@ -221,6 +250,14 @@ export function handleAgentTerminalData(sessionId: string, ownerId: number, data
   }
 
   run.recentOutput = `${run.recentOutput}${data}`.slice(-4000)
+
+  if (!run.externalSessionId) {
+    const externalSessionId = extractExternalSessionId(run, data)
+    if (externalSessionId) {
+      run.externalSessionId = externalSessionId
+      publishUpdate(run)
+    }
+  }
 
   if (run.awaitingResponse && WAITING_PATTERNS.some((pattern) => pattern.test(data))) {
     markRunWaiting(run)

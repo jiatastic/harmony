@@ -3,48 +3,60 @@
 /* ── Theme tokens ──────────────────────────────────── */
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.1448 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.1448 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.1448 0 0);
-  --primary: oklch(0 0 0);
+  --background: oklch(0.9551 0 0);
+  --foreground: oklch(0.3211 0 0);
+  --card: oklch(0.9702 0 0);
+  --card-foreground: oklch(0.3211 0 0);
+  --popover: oklch(0.9702 0 0);
+  --popover-foreground: oklch(0.3211 0 0);
+  --primary: oklch(0.4891 0 0);
   --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.9674 0.0013 286.3752);
-  --secondary-foreground: oklch(0.2103 0.0059 285.8852);
-  --muted: oklch(0.9674 0.0013 286.3752);
-  --muted-foreground: oklch(0.5517 0.0138 285.9385);
-  --accent: oklch(0.9674 0.0013 286.3752);
-  --accent-foreground: oklch(0.2103 0.0059 285.8852);
-  --destructive: oklch(0.6368 0.2078 25.3313);
-  --destructive-foreground: oklch(0.9851 0 0);
-  --border: oklch(0.9197 0.004 286.3202);
-  --input: oklch(0.9197 0.004 286.3202);
-  --ring: oklch(0.7118 0.0129 286.0665);
-  --sidebar: oklch(0.9851 0 0);
-  --sidebar-foreground: oklch(0.3703 0.0119 285.8054);
-  --sidebar-primary: oklch(0.2103 0.0059 285.8852);
+  --secondary: oklch(0.9067 0 0);
+  --secondary-foreground: oklch(0.3211 0 0);
+  --muted: oklch(0.8853 0 0);
+  --muted-foreground: oklch(0.5103 0 0);
+  --accent: oklch(0.8078 0 0);
+  --accent-foreground: oklch(0.3211 0 0);
+  --destructive: oklch(0.5594 0.19 25.8625);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.8576 0 0);
+  --input: oklch(0.9067 0 0);
+  --ring: oklch(0.4891 0 0);
+  --chart-1: oklch(0.4891 0 0);
+  --chart-2: oklch(0.4863 0.0361 196.0278);
+  --chart-3: oklch(0.6534 0 0);
+  --chart-4: oklch(0.7316 0 0);
+  --chart-5: oklch(0.8078 0 0);
+  --sidebar: oklch(0.937 0 0);
+  --sidebar-foreground: oklch(0.3211 0 0);
+  --sidebar-primary: oklch(0.4891 0 0);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.9674 0.0013 286.3752);
-  --sidebar-accent-foreground: oklch(0.2103 0.0059 285.8852);
-  --sidebar-border: oklch(0.9674 0.0013 286.3752);
-  --sidebar-ring: oklch(0.7118 0.0129 286.0665);
-  --font-sans: Inter, system-ui, sans-serif;
+  --sidebar-accent: oklch(0.8078 0 0);
+  --sidebar-accent-foreground: oklch(0.3211 0 0);
+  --sidebar-border: oklch(0.8576 0 0);
+  --sidebar-ring: oklch(0.4891 0 0);
+  --font-sans: Montserrat, sans-serif;
   --font-serif: Georgia, serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
-  --radius: 0.6rem;
-  --shadow-2xs: 0px 2px 10px 0px hsl(0 0% 0% / 0.03);
-  --shadow-xs: 0px 2px 10px 0px hsl(0 0% 0% / 0.03);
-  --shadow-sm: 0px 2px 10px 0px hsl(0 0% 0% / 0.05), 0px 1px 2px -1px hsl(0 0% 0% / 0.05);
-  --shadow: 0px 2px 10px 0px hsl(0 0% 0% / 0.05), 0px 1px 2px -1px hsl(0 0% 0% / 0.05);
-  --shadow-md: 0px 2px 10px 0px hsl(0 0% 0% / 0.05), 0px 2px 4px -1px hsl(0 0% 0% / 0.05);
-  --shadow-lg: 0px 2px 10px 0px hsl(0 0% 0% / 0.05), 0px 4px 6px -1px hsl(0 0% 0% / 0.05);
-  --shadow-xl: 0px 2px 10px 0px hsl(0 0% 0% / 0.05), 0px 8px 10px -1px hsl(0 0% 0% / 0.05);
-  --shadow-2xl: 0px 2px 10px 0px hsl(0 0% 0% / 0.13);
-  --tracking-normal: -0.01em;
-  --scrollbar-thumb: oklch(0.78 0.004 286.3202 / 0.55);
-  --scrollbar-thumb-hover: oklch(0.66 0.004 286.3202 / 0.75);
+  --font-mono: 'Fira Code', monospace;
+  --radius: 0.35rem;
+  --shadow-x: 0px;
+  --shadow-y: 2px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0.15;
+  --shadow-color: hsl(0 0% 20% / 0.1);
+  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 20% / 0.07);
+  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 20% / 0.07);
+  --shadow-sm: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 1px 2px -1px hsl(0 0% 20% / 0.15);
+  --shadow: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 1px 2px -1px hsl(0 0% 20% / 0.15);
+  --shadow-md: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 2px 4px -1px hsl(0 0% 20% / 0.15);
+  --shadow-lg: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 4px 6px -1px hsl(0 0% 20% / 0.15);
+  --shadow-xl: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 8px 10px -1px hsl(0 0% 20% / 0.15);
+  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 20% / 0.38);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+  --scrollbar-thumb: oklch(0.6534 0 0 / 0.45);
+  --scrollbar-thumb-hover: oklch(0.5103 0 0 / 0.7);
   color-scheme: light;
 }
 
@@ -63,48 +75,60 @@
 }
 
 .dark {
-  --background: oklch(0.205 0.006 286);
-  --foreground: oklch(0.9851 0 0);
-  --card: oklch(0.225 0.007 286);
-  --card-foreground: oklch(0.9851 0 0);
-  --popover: oklch(0.235 0.007 286);
-  --popover-foreground: oklch(0.9851 0 0);
-  --primary: oklch(0.9851 0 0);
-  --primary-foreground: oklch(0.205 0.006 286);
-  --secondary: oklch(0.285 0.008 286);
-  --secondary-foreground: oklch(0.9851 0 0);
-  --muted: oklch(0.27 0.008 286);
-  --muted-foreground: oklch(0.76 0.013 286.1);
-  --accent: oklch(0.305 0.01 286);
-  --accent-foreground: oklch(0.9851 0 0);
-  --destructive: oklch(0.3958 0.1331 25.723);
-  --destructive-foreground: oklch(0.9851 0 0);
-  --border: oklch(0.355 0.009 286);
-  --input: oklch(0.355 0.009 286);
-  --ring: oklch(0.43 0.015 286);
-  --sidebar: oklch(0.175 0.006 286);
-  --sidebar-foreground: oklch(0.8 0.012 286.1);
-  --sidebar-primary: oklch(0.9851 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0.006 286);
-  --sidebar-accent: oklch(0.255 0.008 286);
-  --sidebar-accent-foreground: oklch(0.9851 0 0);
-  --sidebar-border: oklch(0.3 0.008 286);
-  --sidebar-ring: oklch(0.37 0.012 286);
-  --font-sans: Inter, system-ui, sans-serif;
+  --background: oklch(0.2178 0 0);
+  --foreground: oklch(0.8853 0 0);
+  --card: oklch(0.2435 0 0);
+  --card-foreground: oklch(0.8853 0 0);
+  --popover: oklch(0.2435 0 0);
+  --popover-foreground: oklch(0.8853 0 0);
+  --primary: oklch(0.7058 0 0);
+  --primary-foreground: oklch(0.2178 0 0);
+  --secondary: oklch(0.3092 0 0);
+  --secondary-foreground: oklch(0.8853 0 0);
+  --muted: oklch(0.285 0 0);
+  --muted-foreground: oklch(0.5999 0 0);
+  --accent: oklch(0.3715 0 0);
+  --accent-foreground: oklch(0.8853 0 0);
+  --destructive: oklch(0.6591 0.153 22.1703);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.329 0 0);
+  --input: oklch(0.3092 0 0);
+  --ring: oklch(0.7058 0 0);
+  --chart-1: oklch(0.7058 0 0);
+  --chart-2: oklch(0.6714 0.0339 206.3482);
+  --chart-3: oklch(0.5452 0 0);
+  --chart-4: oklch(0.4604 0 0);
+  --chart-5: oklch(0.3715 0 0);
+  --sidebar: oklch(0.2393 0 0);
+  --sidebar-foreground: oklch(0.8853 0 0);
+  --sidebar-primary: oklch(0.7058 0 0);
+  --sidebar-primary-foreground: oklch(0.2178 0 0);
+  --sidebar-accent: oklch(0.3715 0 0);
+  --sidebar-accent-foreground: oklch(0.8853 0 0);
+  --sidebar-border: oklch(0.329 0 0);
+  --sidebar-ring: oklch(0.7058 0 0);
+  --font-sans: Inter, sans-serif;
   --font-serif: Georgia, serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
-  --radius: 0.6rem;
-  --shadow-2xs: 0px 4px 20px 0px hsl(0 0% 0% / 0.14);
-  --shadow-xs: 0px 4px 20px 0px hsl(0 0% 0% / 0.14);
-  --shadow-sm: 0px 4px 20px 0px hsl(0 0% 0% / 0.28), 0px 1px 2px -1px hsl(0 0% 0% / 0.28);
-  --shadow: 0px 4px 20px 0px hsl(0 0% 0% / 0.28), 0px 1px 2px -1px hsl(0 0% 0% / 0.28);
-  --shadow-md: 0px 4px 20px 0px hsl(0 0% 0% / 0.3), 0px 2px 4px -1px hsl(0 0% 0% / 0.3);
-  --shadow-lg: 0px 4px 20px 0px hsl(0 0% 0% / 0.32), 0px 4px 6px -1px hsl(0 0% 0% / 0.32);
-  --shadow-xl: 0px 4px 20px 0px hsl(0 0% 0% / 0.34), 0px 8px 10px -1px hsl(0 0% 0% / 0.34);
-  --shadow-2xl: 0px 4px 20px 0px hsl(0 0% 0% / 0.6);
-  --tracking-normal: -0.01em;
-  --scrollbar-thumb: oklch(0.46 0.012 286 / 0.45);
-  --scrollbar-thumb-hover: oklch(0.62 0.014 286 / 0.58);
+  --font-mono: 'Fira Code', monospace;
+  --radius: 0.35rem;
+  --shadow-x: 0px;
+  --shadow-y: 2px;
+  --shadow-blur: 0px;
+  --shadow-spread: 0px;
+  --shadow-opacity: 0.15;
+  --shadow-color: hsl(0 0% 20% / 0.1);
+  --shadow-2xs: 0px 2px 0px 0px hsl(0 0% 20% / 0.07);
+  --shadow-xs: 0px 2px 0px 0px hsl(0 0% 20% / 0.07);
+  --shadow-sm: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 1px 2px -1px hsl(0 0% 20% / 0.15);
+  --shadow: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 1px 2px -1px hsl(0 0% 20% / 0.15);
+  --shadow-md: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 2px 4px -1px hsl(0 0% 20% / 0.15);
+  --shadow-lg: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 4px 6px -1px hsl(0 0% 20% / 0.15);
+  --shadow-xl: 0px 2px 0px 0px hsl(0 0% 20% / 0.15), 0px 8px 10px -1px hsl(0 0% 20% / 0.15);
+  --shadow-2xl: 0px 2px 0px 0px hsl(0 0% 20% / 0.38);
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+  --scrollbar-thumb: oklch(0.5452 0 0 / 0.4);
+  --scrollbar-thumb-hover: oklch(0.6714 0.0339 206.3482 / 0.55);
   color-scheme: dark;
 }
 
@@ -419,7 +443,7 @@ button {
 
 .layout {
   display: grid;
-  grid-template-columns: 260px 4px minmax(0, 1fr) 4px 320px;
+  grid-template-columns: 260px 1px minmax(0, 1fr) 1px 320px;
   min-height: 0;
 }
 
@@ -430,10 +454,78 @@ button {
   overflow: hidden;
 }
 
+.panel-center {
+  display: flex;
+  min-width: 0;
+}
+
+.center-split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.center-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel-diff {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: color-mix(in oklab, var(--background) 94%, var(--sidebar));
+}
+
+.diff-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-pane-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  color: var(--muted-foreground);
+}
+
+.diff-pane-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--muted) 84%, transparent);
+  color: var(--muted-foreground);
+}
+
+.diff-pane-close:hover {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.diff-pane-close:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
 .resize-handle {
-  width: 4px;
-  min-width: 4px;
-  background: transparent;
+  width: 1px;
+  min-width: 1px;
+  background: var(--border);
   cursor: col-resize;
   -webkit-app-region: no-drag;
   position: relative;
@@ -832,7 +924,7 @@ button {
   flex: 1;
   min-width: 0;
   font-size: 12.5px;
-  font-weight: 400;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -846,12 +938,20 @@ button {
 
 .wt-main-badge {
   font-size: 10px;
-  font-weight: 500;
-  padding: 1px 5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 1px 6px;
   border-radius: 999px;
-  background: oklch(0.723 0.191 142.5 / 0.15);
-  color: oklch(0.723 0.191 142.5);
+  background: oklch(0.92 0.05 142.5);
+  color: oklch(0.43 0.12 142.5);
+  border: 1px solid oklch(0.78 0.09 142.5);
   flex-shrink: 0;
+}
+
+.dark .wt-main-badge {
+  background: oklch(0.33 0.06 142.5 / 0.9);
+  color: oklch(0.88 0.1 142.5);
+  border-color: oklch(0.5 0.08 142.5);
 }
 
 .wt-remove-btn {
@@ -899,7 +999,7 @@ button {
   max-width: 100%;
   padding: 5px 9px;
   border-radius: 10px;
-  background: color-mix(in oklab, var(--muted) 74%, transparent);
+  background: transparent;
   color: var(--muted-foreground);
   width: 100%;
   text-align: left;
@@ -908,7 +1008,7 @@ button {
 }
 
 .wt-open-terminal-chip:hover {
-  background: color-mix(in oklab, var(--sidebar-accent) 88%, transparent);
+  background: transparent;
   color: var(--foreground);
 }
 
@@ -949,6 +1049,7 @@ button {
   min-width: 0;
   max-width: none;
   font-size: 11.5px;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1143,6 +1244,7 @@ button {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -1306,6 +1408,14 @@ button {
 
 .terminal-tab-status.is-error {
   background: var(--destructive);
+}
+
+.terminal-tab-status.is-exited {
+  background: color-mix(in oklab, var(--muted-foreground) 82%, var(--border));
+}
+
+.terminal-tab-status.is-destroyed {
+  background: color-mix(in oklab, var(--destructive) 55%, var(--border));
 }
 
 /* New tab button — flush, square, after the last tab */
@@ -1500,6 +1610,7 @@ button {
 
 .terminal-panes {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1643,6 +1754,7 @@ button {
 
 .terminal-stack {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   position: relative;
@@ -1650,6 +1762,7 @@ button {
 
 .terminal-host {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   padding: 8px;
@@ -1659,6 +1772,106 @@ button {
 
 .terminal-host .xterm {
   height: 100%;
+  width: 100%;
+}
+
+.terminal-exit-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in oklab, var(--background) 78%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.terminal-exit-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 2);
+  background: color-mix(in oklab, var(--background) 94%, var(--sidebar));
+  box-shadow: var(--shadow-md);
+}
+
+.terminal-exit-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.terminal-exit-copy {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.terminal-exit-copy code {
+  color: var(--foreground);
+}
+
+.terminal-exit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-exit-restart {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 92px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in oklab, var(--ring) 55%, var(--border));
+  border-radius: calc(var(--radius) * 1.6);
+  background: color-mix(in oklab, var(--accent) 48%, var(--background));
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.terminal-exit-restart:hover {
+  background: color-mix(in oklab, var(--accent) 62%, var(--background));
+  border-color: color-mix(in oklab, var(--ring) 72%, var(--border));
+}
+
+.terminal-exit-restart:active {
+  transform: translateY(1px);
+}
+
+.terminal-exit-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 92px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in oklab, var(--border) 92%, transparent);
+  border-radius: calc(var(--radius) * 1.6);
+  background: color-mix(in oklab, var(--background) 90%, var(--sidebar));
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.terminal-exit-dismiss:hover {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--background) 82%, var(--sidebar));
+  border-color: color-mix(in oklab, var(--foreground) 22%, var(--border));
+}
+
+.terminal-exit-dismiss:active {
+  transform: translateY(1px);
 }
 
 .agent-chat-pane {
@@ -1667,7 +1880,9 @@ button {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: color-mix(in oklab, var(--background) 98%, var(--sidebar));
+  background:
+    radial-gradient(circle at top, color-mix(in oklab, var(--accent) 12%, transparent), transparent 42%),
+    linear-gradient(180deg, color-mix(in oklab, var(--background) 98%, var(--sidebar)) 0%, var(--background) 100%);
 }
 
 .agent-chat-messages {
@@ -1676,18 +1891,18 @@ button {
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 20px 20px 22px;
+  gap: 18px;
+  padding: 28px 24px 22px;
 }
 
 .agent-chat-empty {
   width: min(760px, 100%);
-  margin: auto auto 12px;
+  margin: auto auto 14px;
   padding: 8px 4px;
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .agent-chat-empty-kicker {
@@ -1698,19 +1913,56 @@ button {
 }
 
 .agent-chat-empty-title {
-  max-width: 12ch;
-  font-size: 40px;
+  max-width: 11ch;
+  font-size: 46px;
   font-weight: 700;
   color: var(--foreground);
-  letter-spacing: -0.03em;
-  line-height: 0.98;
+  letter-spacing: -0.045em;
+  line-height: 0.94;
 }
 
 .agent-chat-empty-copy {
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.65;
   color: var(--muted-foreground);
-  max-width: 52ch;
+  max-width: 58ch;
+}
+
+.agent-chat-starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.agent-chat-starter {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  background: color-mix(in oklab, var(--background) 88%, var(--sidebar));
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  transition:
+    transform 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.agent-chat-starter:hover {
+  transform: translateY(-1px);
+  background: color-mix(in oklab, var(--accent) 55%, var(--background));
+  border-color: color-mix(in oklab, var(--ring) 78%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+
+.agent-chat-starter:active {
+  transform: scale(0.97);
 }
 
 .agent-chat-message {
@@ -1729,7 +1981,7 @@ button {
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .agent-chat-message-meta {
@@ -1751,7 +2003,7 @@ button {
   margin: 0;
   font-family: var(--font-sans);
   font-size: 14px;
-  line-height: 1.68;
+  line-height: 1.72;
   color: inherit;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1764,17 +2016,20 @@ button {
 
 .agent-chat-message.is-user .agent-chat-message-content {
   width: 100%;
-  padding: 13px 15px;
-  border-radius: 20px;
-  background: color-mix(in oklab, var(--primary) 10%, var(--background));
-  border: 1px solid color-mix(in oklab, var(--primary) 18%, var(--border));
+  padding: 14px 16px;
+  border-radius: 22px;
+  background: color-mix(in oklab, var(--primary) 14%, var(--background));
+  border: 1px solid color-mix(in oklab, var(--primary) 22%, var(--border));
   box-shadow: var(--shadow-xs);
 }
 
 .agent-chat-message.is-assistant .agent-chat-message-main {
   max-width: min(100%, 720px);
-  padding-left: 12px;
-  border-left: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  padding: 14px 16px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);
+  background: color-mix(in oklab, var(--background) 92%, var(--sidebar));
+  box-shadow: var(--shadow-xs);
 }
 
 .agent-chat-message.is-assistant .agent-chat-message-content {
@@ -1800,13 +2055,14 @@ button {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: min(800px, calc(100% - 24px));
-  margin: 0 auto 14px;
-  padding: 12px;
-  border: 1px solid color-mix(in oklab, var(--border) 88%, transparent);
-  border-radius: 20px;
-  background: color-mix(in oklab, var(--background) 96%, var(--sidebar));
-  box-shadow: var(--shadow-sm);
+  width: min(860px, calc(100% - 28px));
+  margin: 0 auto 16px;
+  padding: 14px 14px 12px;
+  border: 1px solid color-mix(in oklab, var(--border) 84%, transparent);
+  border-radius: 24px;
+  background: color-mix(in oklab, var(--background) 94%, var(--sidebar));
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
 }
 
 .agent-chat-composer-shell {
@@ -1818,8 +2074,8 @@ button {
 .agent-chat-input {
   flex: 1;
   min-width: 0;
-  min-height: 24px;
-  max-height: 160px;
+  min-height: 28px;
+  max-height: 180px;
   padding: 0;
   resize: none;
   border-radius: 0;
@@ -1827,8 +2083,8 @@ button {
   background: transparent;
   color: var(--foreground);
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.58;
   outline: none;
 }
 
@@ -1850,9 +2106,9 @@ button {
 }
 
 .agent-chat-send {
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 12px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 14px;
   background: var(--primary);
   color: var(--primary-foreground);
   font-size: 12px;
@@ -1914,8 +2170,9 @@ button {
     align-items: stretch;
   }
 
-  .agent-chat-empty-title {
-    font-size: 32px;
+  .agent-chat-starter {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .agent-chat-message.is-user .agent-chat-message-main {
@@ -2214,9 +2471,10 @@ button {
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+
   font-size: 13px;
   color: var(--muted-foreground);
-}
 
 /* ── Right panel ───────────────────────────────────── */
 
@@ -2307,7 +2565,7 @@ button {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .sc-toolbar {
@@ -2501,9 +2759,23 @@ button {
 
 /* File list */
 
-.sc-file-list {
-  flex: 1;
+.sc-file-list,
+.sc-diff-pane,
+.sc-file-list-panel {
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-file-list,
+.sc-file-list-panel {
+  border-bottom: 1px solid var(--border);
+}
+
+.sc-file-list-scroll,
+.sc-diff-view {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sc-section-hd {
@@ -2512,6 +2784,26 @@ button {
   gap: 5px;
   padding: 5px 8px 4px;
   color: var(--muted-foreground);
+}
+
+.sc-section-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+}
+
+.sc-section-toggle:hover {
+  color: var(--foreground);
+}
+
+.sc-section-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .sc-section-label {
@@ -2526,8 +2818,22 @@ button {
   color: var(--muted-foreground);
 }
 
+.sc-section-loading {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
 .sc-section-spacer {
   flex: 1;
+}
+
+.sc-section-chevron {
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+}
+
+.sc-section-chevron.is-collapsed {
+  transform: rotate(-90deg);
 }
 
 /* Directory group */
@@ -2562,12 +2868,38 @@ button {
   display: flex;
   align-items: center;
   gap: 7px;
+  width: 100%;
   padding: 3px 8px 3px 16px;
   min-width: 0;
+  border-radius: 0;
 }
 
 .sc-file-row:hover {
   background: var(--muted);
+}
+
+.sc-file-row.is-selected {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.sc-file-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.sc-file-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+  color: inherit;
+}
+
+.sc-file-main:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .sc-status-dot {
@@ -2601,6 +2933,157 @@ button {
   font-weight: 600;
   color: var(--muted-foreground);
   flex-shrink: 0;
+}
+
+.sc-file-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-file-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.sc-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: calc(var(--radius) * 0.9);
+  background: color-mix(in oklab, var(--muted) 84%, transparent);
+  color: var(--muted-foreground);
+}
+
+.sc-inline-icon:hover {
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--foreground);
+}
+
+.sc-inline-icon:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.sc-file-additions {
+  color: oklch(0.723 0.191 142.5);
+}
+
+.sc-file-deletions {
+  color: oklch(0.6368 0.2078 25.3313);
+}
+
+.sc-file-neutral {
+  color: var(--muted-foreground);
+}
+
+.sc-section-path {
+  min-width: 0;
+  margin-left: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inspector-actions {
+  padding: 8px 8px 0;
+}
+
+.inspector-diff-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--muted) 84%, transparent);
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.inspector-diff-btn:hover {
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.inspector-diff-btn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.sc-diff-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  flex: 1;
+  padding: 16px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.sc-diff-view {
+  padding: 8px 0;
+  background: color-mix(in oklab, var(--background) 88%, var(--muted) 12%);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-x: hidden;
+}
+
+.sc-diff-line {
+  display: grid;
+  grid-template-columns: 44px 44px minmax(0, 1fr);
+  padding: 0 12px;
+  color: var(--foreground);
+}
+
+.sc-diff-ln {
+  padding-right: 10px;
+  text-align: right;
+  color: var(--muted-foreground);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-diff-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.sc-diff-line.is-meta {
+  color: var(--muted-foreground);
+}
+
+.sc-diff-line.is-file {
+  color: oklch(0.6231 0.188 259.8145);
+}
+
+.sc-diff-line.is-hunk {
+  color: oklch(0.796 0.1723 86);
+}
+
+.sc-diff-line.is-added {
+  background: oklch(0.723 0.191 142.5 / 0.12);
+  color: oklch(0.723 0.191 142.5);
+}
+
+.sc-diff-line.is-removed {
+  background: oklch(0.6368 0.2078 25.3313 / 0.12);
+  color: oklch(0.6368 0.2078 25.3313);
 }
 
 /* ── Inspector accordion ───────────────────────────── */
@@ -2845,8 +3328,8 @@ button {
 }
 
 .accord-item-chip.is-disconnected {
-  background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
-  color: var(--muted-foreground);
+  background: oklch(0.6368 0.2078 25.3313 / 0.15);
+  color: oklch(0.6368 0.2078 25.3313);
 }
 
 .accord-item-chip.is-running {

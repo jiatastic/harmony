@@ -39,7 +39,7 @@ function terminalStatusLabel(status?: string, isAgent?: boolean): string | null 
     case 'waiting':
       return 'waiting'
     case 'done':
-      return 'completed'
+      return 'ready'
     case 'error':
       return 'failed'
     default:
@@ -381,7 +381,6 @@ export function WorktreePanel({
                 +
               </button>
             </div>
-
             {group.items.map((ws) => {
               const active = ws.path === selectedPath
               return (
@@ -441,7 +440,6 @@ export function WorktreePanel({
               <span className="wt-group-name">Folders</span>
               <span className="badge">{folderItems.length}</span>
             </div>
-
             {folderItems.map((ws) => {
               const active = ws.path === selectedPath
               return (

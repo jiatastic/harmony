@@ -10,6 +10,7 @@ import type {
   SaveFilePayload,
   TerminalDataEvent,
   TerminalExitEvent,
+  TerminalStateEvent,
   WorkspaceWatchEvent,
   WorktreeCreatePayload,
   WorktreeRemovePayload
@@ -71,6 +72,8 @@ const api: HarmonyApi = {
     ipcRenderer.invoke(harmonyChannels.installSkillFromMarketplace, payload),
   createTerminal: (payload: CreateTerminalPayload) =>
     ipcRenderer.invoke(harmonyChannels.createTerminal, payload),
+  detachTerminal: (sessionId: string) =>
+    ipcRenderer.send(harmonyChannels.detachTerminal, { sessionId }),
   destroyTerminal: (sessionId: string) =>
     ipcRenderer.send(harmonyChannels.destroyTerminal, { sessionId }),
   destroyPersistentTerminal: (persistentId: string) =>
@@ -81,6 +84,8 @@ const api: HarmonyApi = {
     subscribeToChannel<TerminalDataEvent>(harmonyChannels.terminalData, listener),
   onTerminalExit: (listener) =>
     subscribeToChannel<TerminalExitEvent>(harmonyChannels.terminalExit, listener),
+  onTerminalState: (listener) =>
+    subscribeToChannel<TerminalStateEvent>(harmonyChannels.terminalState, listener),
   onAgentUpdate: (listener) => subscribeToChannel<AgentRun>(harmonyChannels.agentUpdate, listener),
   readFile: (payload: ReadFilePayload) => ipcRenderer.invoke(harmonyChannels.readFile, payload),
   stageWorkspaceChanges: (payload) =>
@@ -90,6 +95,7 @@ const api: HarmonyApi = {
   publishBranch: (payload) => ipcRenderer.invoke(harmonyChannels.publishBranch, payload),
   generateCommitMessage: (payload) =>
     ipcRenderer.invoke(harmonyChannels.generateCommitMessage, payload),
+  getWorkspaceDiff: (payload) => ipcRenderer.invoke(harmonyChannels.getWorkspaceDiff, payload),
   resizeTerminal: (sessionId: string, cols: number, rows: number) =>
     ipcRenderer.send(harmonyChannels.resizeTerminal, { sessionId, cols, rows }),
   startAgent: (payload: AgentStartPayload) =>
@@ -97,8 +103,8 @@ const api: HarmonyApi = {
   writeFile: (payload: SaveFilePayload) => ipcRenderer.invoke(harmonyChannels.writeFile, payload),
   writeTerminal: (sessionId: string, data: string) =>
     ipcRenderer.send(harmonyChannels.writeTerminal, { sessionId, data }),
-  listSessionStats: (workspacePath: string) =>
-    ipcRenderer.invoke(harmonyChannels.listSessionStats, workspacePath),
+  listSessionStats: (payload) =>
+    ipcRenderer.invoke(harmonyChannels.listSessionStats, payload),
   getUsageSummary: () => ipcRenderer.invoke(harmonyChannels.getUsageSummary),
   getCodexQuota: () => ipcRenderer.invoke(harmonyChannels.getCodexQuota),
   getClaudeQuota: () => ipcRenderer.invoke(harmonyChannels.getClaudeQuota),

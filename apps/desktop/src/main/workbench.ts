@@ -2,8 +2,9 @@ import { execFile, spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import * as https from 'node:https'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron'
+import { spawn as spawnPty } from 'node-pty'
 import {
   disposeAgentRuns,
   handleAgentTerminalInput,
@@ -19,6 +20,7 @@ import {
   registerTerminalIpc
 } from './terminal'
 import {
+  type SessionStatsRequest,
   type SkillMarketplaceAuditPayload,
   type SkillMarketplaceAuditResult,
   type SkillMarketplaceInstallPayload,
@@ -29,7 +31,7 @@ import {
   harmonyChannels
 } from '../shared/workbench'
 import { ensureBundledSkillsInstalled } from './bundledSkills'
-import { getGitAvailability, installGit } from './git'
+import { getGitAvailability, installGit, runGitCommand } from './git'
 import { registerSourceControlIpc } from './sourceControl'
 import { disposeWorkspaceWatches, registerWorktreeIpc } from './worktree'
 
@@ -951,137 +953,201 @@ async function getClaudeUsageSummary(): Promise<import('../shared/workbench').Ag
   }
 }
 
-function createEmptyClaudeUsageWindow(): import('../shared/workbench').ClaudeUsageWindow {
+let claudeQuotaCache: { data: import('../shared/workbench').ClaudeQuota | null; fetchedAt: number } | null = null
+let compatibleClaudeNodeBinaryCache: string | null | undefined
+
+function parseClaudePercent(line: string): number | null {
+  const match = line.match(/(\d+(?:\.\d+)?)\s*%/)
+  return match ? Number(match[1]) : null
+}
+
+function parseClaudeResetLabel(line: string): string | undefined {
+  const match = line.match(/((?:reset|resets)\b.*)$/i)
+  return match?.[1]?.trim()
+}
+
+function parseClaudeAccountField(raw: string, label: string): string | undefined {
+  const match = raw.match(new RegExp(`${label}\\s*:\\s*([^\\n]+)`, 'i'))
+  const value = match?.[1]?.trim()
+  return value ? value : undefined
+}
+
+function parseClaudeQuotaFromCli(usageRaw: string, statusRaw: string): import('../shared/workbench').ClaudeQuota | null {
+  const usageLines = usageRaw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const combined = `${statusRaw}\n${usageRaw}`
+
+  const findWindow = (matcher: RegExp): import('../shared/workbench').ClaudeQuotaWindow | undefined => {
+    const line = usageLines.find((entry) => matcher.test(entry))
+    if (!line) {
+      return undefined
+    }
+
+    const usedPct = parseClaudePercent(line)
+    if (usedPct == null) {
+      return undefined
+    }
+
+    return {
+      usedPct,
+      resetLabel: parseClaudeResetLabel(line)
+    }
+  }
+
+  const session = findWindow(/\b(5h|5-hour|5 hour|session)\b/i)
+  const weekly = findWindow(/\b(week|weekly|7d|7-day|7 day)\b/i)
+  const opus = findWindow(/\bopus\b/i)
+
+  if (!session && !weekly && !opus) {
+    return null
+  }
+
+  const planMatch = combined.match(/\b(max|pro|team|enterprise|free)\b/i)
   return {
-    sessionCount: 0,
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    totalCacheTokens: 0
+    source: 'cli',
+    planType: planMatch?.[1]?.toLowerCase() ?? 'connected',
+    email: parseClaudeAccountField(statusRaw, 'email'),
+    organization: parseClaudeAccountField(statusRaw, 'org(?:anization)?'),
+    loginMethod: parseClaudeAccountField(statusRaw, 'login(?: method)?'),
+    session,
+    weekly,
+    additionalLimits: opus
+      ? [
+          {
+            name: 'Opus',
+            usedPct: opus.usedPct,
+            resetLabel: opus.resetLabel
+          }
+        ]
+      : []
   }
 }
 
-function addClaudeUsage(
-  target: import('../shared/workbench').ClaudeUsageWindow,
-  usage: { input: number; output: number; cache: number; cost: number }
-): void {
-  target.totalInputTokens += usage.input
-  target.totalOutputTokens += usage.output
-  target.totalCacheTokens += usage.cache
-  if (usage.cost > 0) {
-    target.totalCostUSD = (target.totalCostUSD ?? 0) + usage.cost
+function stripAnsi(value: string): string {
+  return value.replace(/\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+}
+
+function escapeShellArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+async function findCompatibleClaudeNodeBinary(): Promise<string | null> {
+  if (compatibleClaudeNodeBinaryCache !== undefined) {
+    return compatibleClaudeNodeBinaryCache
   }
+
+  const cellarRoot = '/opt/homebrew/Cellar/node'
+  const entries = await fs.readdir(cellarRoot).catch(() => [] as string[])
+  const parsed = entries
+    .map((version) => {
+      const match = version.match(/^(\d+)\.(\d+)\.(\d+)/)
+      if (!match) {
+        return null
+      }
+
+      return {
+        version,
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+        path: join(cellarRoot, version, 'bin', 'node')
+      }
+    })
+    .filter((entry): entry is { version: string; major: number; minor: number; patch: number; path: string } => Boolean(entry))
+    .filter((entry) => entry.major >= 18 && entry.major < 25)
+    .sort((a, b) => {
+      if (a.major !== b.major) return b.major - a.major
+      if (a.minor !== b.minor) return b.minor - a.minor
+      return b.patch - a.patch
+    })
+
+  for (const entry of parsed) {
+    try {
+      await fs.access(entry.path)
+      compatibleClaudeNodeBinaryCache = entry.path
+      return entry.path
+    } catch {
+      continue
+    }
+  }
+
+  compatibleClaudeNodeBinaryCache = null
+  return null
+}
+
+async function runClaudeCliCommand(args: string[]): Promise<string | null> {
+  const nodeBinary = await findCompatibleClaudeNodeBinary()
+  if (!nodeBinary) {
+    return null
+  }
+
+  const shellPath = process.env.SHELL || '/bin/zsh'
+  const claudeCliPath = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+  const command = [
+    'env',
+    `PATH=${join(nodeBinary, '..')}:${process.env.PATH ?? ''}`,
+    escapeShellArg(nodeBinary),
+    '--no-warnings',
+    '--enable-source-maps',
+    escapeShellArg(claudeCliPath),
+    ...args.map(escapeShellArg)
+  ].join(' ')
+
+  return await new Promise((resolveCommand) => {
+    const pty = spawnPty(shellPath, ['-lc', command], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 32,
+      cwd: homedir(),
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor',
+        PATH: `${join(nodeBinary, '..')}:${process.env.PATH ?? ''}`
+      }
+    })
+
+    let output = ''
+    const timer = setTimeout(() => {
+      pty.kill()
+      resolveCommand(null)
+    }, 15_000)
+
+    pty.onData((chunk) => {
+      output += chunk
+    })
+
+    pty.onExit(() => {
+      clearTimeout(timer)
+      const cleaned = stripAnsi(output)
+        .replace(/\r/g, '')
+        .replace(/\u0007/g, '')
+        .trim()
+      resolveCommand(cleaned || null)
+    })
+  })
 }
 
 async function getClaudeQuota(): Promise<import('../shared/workbench').ClaudeQuota | null> {
-  const transcriptsRoot = join(homedir(), '.claude', 'transcripts')
-  const now = Date.now()
-  const cutoff5h = now - 5 * 3_600_000
-  const cutoff7d = now - 7 * 86_400_000
-  const cutoff30d = now - 30 * 86_400_000
+  if (claudeQuotaCache && Date.now() - claudeQuotaCache.fetchedAt < QUOTA_CACHE_TTL_MS) {
+    return claudeQuotaCache.data
+  }
 
-  const files = await fs.readdir(transcriptsRoot, { withFileTypes: true }).catch(() => [])
-  if (files.length === 0) {
+  const [usageRaw, statusRaw] = await Promise.all([
+    runClaudeCliCommand(['/usage']),
+    runClaudeCliCommand(['/status'])
+  ])
+
+  if (!usageRaw || !statusRaw) {
+    claudeQuotaCache = { data: null, fetchedAt: Date.now() }
     return null
   }
 
-  const rolling5h = createEmptyClaudeUsageWindow()
-  const rolling7d = createEmptyClaudeUsageWindow()
-  const rolling30d = createEmptyClaudeUsageWindow()
-  const sessionSets = {
-    rolling5h: new Set<string>(),
-    rolling7d: new Set<string>(),
-    rolling30d: new Set<string>()
-  }
-
-  for (const entry of files) {
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
-      continue
-    }
-
-    const filePath = join(transcriptsRoot, entry.name)
-    const stat = await fs.stat(filePath).catch(() => null)
-    if (!stat || stat.mtimeMs < cutoff30d) {
-      continue
-    }
-
-    const content = await fs.readFile(filePath, 'utf8').catch(() => '')
-    if (!content) {
-      continue
-    }
-
-    const sessionId = entry.name.replace(/\.jsonl$/, '')
-    let seen5h = false
-    let seen7d = false
-    let seen30d = false
-
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue
-
-      try {
-        const ev = JSON.parse(line) as {
-          timestamp?: string
-          costUSD?: number | null
-          message?: {
-            usage?: {
-              input_tokens?: number
-              output_tokens?: number
-              cache_creation_input_tokens?: number
-              cache_read_input_tokens?: number
-            }
-          }
-        }
-
-        const timestamp = ev.timestamp ? Date.parse(ev.timestamp) : NaN
-        if (Number.isNaN(timestamp) || timestamp < cutoff30d) {
-          continue
-        }
-
-        const usage = {
-          input: ev.message?.usage?.input_tokens ?? 0,
-          output: ev.message?.usage?.output_tokens ?? 0,
-          cache:
-            (ev.message?.usage?.cache_creation_input_tokens ?? 0) +
-            (ev.message?.usage?.cache_read_input_tokens ?? 0),
-          cost: ev.costUSD ?? 0
-        }
-
-        if (timestamp >= cutoff30d) {
-          addClaudeUsage(rolling30d, usage)
-          seen30d = true
-        }
-        if (timestamp >= cutoff7d) {
-          addClaudeUsage(rolling7d, usage)
-          seen7d = true
-        }
-        if (timestamp >= cutoff5h) {
-          addClaudeUsage(rolling5h, usage)
-          seen5h = true
-        }
-      } catch {
-        /* skip malformed lines */
-      }
-    }
-
-    if (seen30d) sessionSets.rolling30d.add(sessionId)
-    if (seen7d) sessionSets.rolling7d.add(sessionId)
-    if (seen5h) sessionSets.rolling5h.add(sessionId)
-  }
-
-  rolling5h.sessionCount = sessionSets.rolling5h.size
-  rolling7d.sessionCount = sessionSets.rolling7d.size
-  rolling30d.sessionCount = sessionSets.rolling30d.size
-
-  if (rolling30d.sessionCount === 0) {
-    return null
-  }
-
-  return {
-    source: 'local-estimate',
-    note: 'Estimated from local Claude transcripts. Official subscription quota and reset times are not exposed here.',
-    rolling5h,
-    rolling7d,
-    rolling30d
-  }
+  const quota = parseClaudeQuotaFromCli(usageRaw, statusRaw)
+  claudeQuotaCache = { data: quota, fetchedAt: Date.now() }
+  return quota
 }
 
 async function getOpenCodeUsageSummary(): Promise<import('../shared/workbench').AgentUsage> {
@@ -1120,14 +1186,26 @@ async function getUsageSummary(): Promise<import('../shared/workbench').AgentUsa
 }
 
 async function listSessionStats(
-  workspacePath: string
+  payload: SessionStatsRequest
 ): Promise<import('../shared/workbench').SessionStat[]> {
+  const workspacePath = payload.workspacePath
   const [opencode, codex] = await Promise.all([
     listOpenCodeSessionStats(workspacePath),
     listCodexSessionStats(workspacePath)
   ])
-  // Interleave by time, newest first, cap at 8 total
-  return [...opencode, ...codex]
+
+  const all = [...opencode, ...codex]
+  const hint = payload.activeHint
+  if (hint?.agent && hint.externalSessionId) {
+    const exactMatches = all.filter(
+      (session) => session.agent === hint.agent && session.id === hint.externalSessionId
+    )
+    if (exactMatches.length > 0) {
+      return exactMatches
+    }
+  }
+
+  return all
     .sort((a, b) => b.timeUpdated - a.timeUpdated)
     .slice(0, 8)
 }
@@ -1153,6 +1231,20 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
 
 let codexQuotaCache: { data: import('../shared/workbench').CodexQuota | null; fetchedAt: number } | null = null
 const QUOTA_CACHE_TTL_MS = 5 * 60_000 // 5 minutes
+
+async function resolveWorkspaceSelection(selectedPath: string): Promise<string> {
+  const normalizedPath = resolve(selectedPath)
+
+  try {
+    return resolve(
+      await runGitCommand(['rev-parse', '--show-toplevel'], {
+        cwd: normalizedPath
+      })
+    )
+  } catch {
+    return normalizedPath
+  }
+}
 
 async function getCodexQuota(): Promise<import('../shared/workbench').CodexQuota | null> {
   if (codexQuotaCache && Date.now() - codexQuotaCache.fetchedAt < QUOTA_CACHE_TTL_MS) {
@@ -1266,7 +1358,9 @@ export function registerWorkbenchIpc(): void {
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)
     if (result.canceled) return null
-    return result.filePaths[0] ?? null
+    const selectedPath = result.filePaths[0]
+    if (!selectedPath) return null
+    return await resolveWorkspaceSelection(selectedPath)
   })
 
   ipcMain.handle(harmonyChannels.gitStatus, async () => await getGitAvailability())
@@ -1350,8 +1444,8 @@ export function registerWorkbenchIpc(): void {
     async (_event, payload: SkillMarketplaceInstallPayload) => await installSkillFromMarketplace(payload)
   )
 
-  ipcMain.handle(harmonyChannels.listSessionStats, (_, workspacePath: string) =>
-    listSessionStats(workspacePath)
+  ipcMain.handle(harmonyChannels.listSessionStats, (_, payload: SessionStatsRequest) =>
+    listSessionStats(payload)
   )
 
   ipcMain.handle(harmonyChannels.getUsageSummary, () => getUsageSummary())
