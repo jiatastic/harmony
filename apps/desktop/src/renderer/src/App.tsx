@@ -1383,7 +1383,7 @@ function App(): React.JSX.Element {
   const handleCreateWorktree = useCallback(
     async (branch: BranchInfo, workspacePath?: string): Promise<void> => {
       try {
-        let path = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0] ?? null
+        let path: string | null = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0] ?? null
         if (!path) {
           path = await openFolderAndRefresh()
         }
