@@ -207,11 +207,18 @@ function cssVar(name: string, fallback: string): string {
 }
 
 function terminalTheme(): ITheme {
-  const background = cssVar('--terminal-surface', '#0b1220')
-  const foreground = cssVar('--terminal-foreground', '#e5eefb')
-  const accent = cssVar('--terminal-accent', '#58c4ff')
-  const muted = cssVar('--terminal-muted', '#8ca0bc')
-  const selection = cssVar('--terminal-selection', 'rgba(88,196,255,0.2)')
+  const background = cssVar('--terminal-surface', isDarkMode() ? '#262b34' : '#fbfcfd')
+  const foreground = cssVar('--terminal-foreground', isDarkMode() ? '#eef2f7' : '#20242b')
+  const accent = cssVar('--terminal-accent', isDarkMode() ? '#68b8d1' : '#2e8aa8')
+  const muted = cssVar('--terminal-muted', isDarkMode() ? '#98a2b3' : '#69707d')
+  const destructive = cssVar('--destructive', isDarkMode() ? '#f87171' : '#e45649')
+  const green = cssVar('--chart-3', isDarkMode() ? '#73d39c' : '#5e9b67')
+  const yellow = cssVar('--chart-5', isDarkMode() ? '#dfc06f' : '#b4872f')
+  const cyan = cssVar('--chart-2', isDarkMode() ? '#68b8d1' : '#2e8aa8')
+  const selection = cssVar(
+    '--terminal-selection',
+    isDarkMode() ? 'rgba(104,184,209,0.18)' : 'rgba(46,138,168,0.14)'
+  )
 
   return {
     background,
@@ -220,22 +227,22 @@ function terminalTheme(): ITheme {
     cursorAccent: background,
     selectionBackground: selection,
     selectionForeground: foreground,
-    black: '#0f172a',
-    red: '#f87171',
-    green: '#4ade80',
-    yellow: '#fbbf24',
-    blue: '#60a5fa',
-    magenta: '#c084fc',
-    cyan: '#67e8f9',
-    white: '#dbe7fb',
+    black: isDarkMode() ? '#1f242c' : '#e7eaee',
+    red: destructive,
+    green,
+    yellow,
+    blue: accent,
+    magenta: isDarkMode() ? '#b8a5d6' : '#8f76b8',
+    cyan,
+    white: foreground,
     brightBlack: muted,
-    brightRed: '#fca5a5',
-    brightGreen: '#86efac',
-    brightYellow: '#fcd34d',
-    brightBlue: '#93c5fd',
-    brightMagenta: '#d8b4fe',
-    brightCyan: '#a5f3fc',
-    brightWhite: '#f8fbff'
+    brightRed: destructive,
+    brightGreen: green,
+    brightYellow: yellow,
+    brightBlue: accent,
+    brightMagenta: isDarkMode() ? '#d3c5ea' : '#a78ecf',
+    brightCyan: cyan,
+    brightWhite: isDarkMode() ? '#ffffff' : '#111827'
   }
 }
 

@@ -57,17 +57,17 @@
   --spacing: 0.25rem;
   --scrollbar-thumb: oklch(0.6534 0 0 / 0.45);
   --scrollbar-thumb-hover: oklch(0.5103 0 0 / 0.7);
-  --terminal-canvas: #060c17;
-  --terminal-surface: #0b1220;
-  --terminal-raised: #13203a;
-  --terminal-border: rgb(148 163 184 / 0.18);
-  --terminal-border-strong: rgb(148 163 184 / 0.28);
-  --terminal-foreground: #e5eefb;
-  --terminal-muted: #8ca0bc;
-  --terminal-accent: #58c4ff;
-  --terminal-accent-soft: rgb(88 196 255 / 0.14);
-  --terminal-selection: rgb(88 196 255 / 0.2);
-  --terminal-shadow: 0 24px 60px rgb(2 6 23 / 0.3);
+  --terminal-canvas: #f1f3f6;
+  --terminal-surface: #fbfcfd;
+  --terminal-raised: #eef2f6;
+  --terminal-border: rgb(17 24 39 / 0.08);
+  --terminal-border-strong: rgb(17 24 39 / 0.14);
+  --terminal-foreground: #20242b;
+  --terminal-muted: #69707d;
+  --terminal-accent: #2e8aa8;
+  --terminal-accent-soft: rgb(46 138 168 / 0.12);
+  --terminal-selection: rgb(46 138 168 / 0.14);
+  --terminal-shadow: 0 10px 24px rgb(15 23 42 / 0.08);
   color-scheme: light;
 }
 
@@ -140,17 +140,17 @@
   --spacing: 0.25rem;
   --scrollbar-thumb: oklch(0.5452 0 0 / 0.4);
   --scrollbar-thumb-hover: oklch(0.6714 0.0339 206.3482 / 0.55);
-  --terminal-canvas: #050914;
-  --terminal-surface: #0a1020;
-  --terminal-raised: #12203b;
-  --terminal-border: rgb(148 163 184 / 0.2);
-  --terminal-border-strong: rgb(148 163 184 / 0.32);
-  --terminal-foreground: #ebf3ff;
-  --terminal-muted: #90a4c2;
-  --terminal-accent: #75d0ff;
-  --terminal-accent-soft: rgb(117 208 255 / 0.16);
-  --terminal-selection: rgb(117 208 255 / 0.22);
-  --terminal-shadow: 0 28px 72px rgb(0 0 0 / 0.42);
+  --terminal-canvas: #20252d;
+  --terminal-surface: #262b34;
+  --terminal-raised: #303743;
+  --terminal-border: rgb(255 255 255 / 0.08);
+  --terminal-border-strong: rgb(255 255 255 / 0.14);
+  --terminal-foreground: #eef2f7;
+  --terminal-muted: #98a2b3;
+  --terminal-accent: #68b8d1;
+  --terminal-accent-soft: rgb(104 184 209 / 0.14);
+  --terminal-selection: rgb(104 184 209 / 0.18);
+  --terminal-shadow: 0 16px 36px rgb(0 0 0 / 0.24);
   color-scheme: dark;
 }
 
