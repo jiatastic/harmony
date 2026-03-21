@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { promises as fs, watch as watchFs, type FSWatcher } from 'node:fs'
+import { promises as fs, watch as watchFs } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import process from 'node:process'
 import { ipcMain, type WebContents } from 'electron'
@@ -21,16 +21,21 @@ import { runGitCommand } from './git'
 const SKIPPED_NAMES = new Set(['.git', 'node_modules', 'dist', 'out', '.DS_Store'])
 const MAX_TREE_DEPTH = 4
 const MAX_TREE_NODES = 600
+const WORKSPACE_WATCH_POLL_INTERVAL_MS = 1500
 
 let repositoryRootPromise: Promise<string | null> | null = null
 const workspaceWatchers = new Map<string, WorkspaceWatchRegistration>()
+
+interface WorkspaceWatcherHandle {
+  close(): void
+}
 
 interface WorkspaceWatchRegistration {
   id: string
   workspacePath: string
   ownerId: number
   sender: WebContents
-  watchers: FSWatcher[]
+  watchers: WorkspaceWatcherHandle[]
 }
 
 async function getRepositoryRootFromPath(path: string): Promise<string> {
@@ -488,6 +493,88 @@ async function resolveGitWatchPaths(workspacePath: string): Promise<string[]> {
   return Array.from(paths)
 }
 
+async function buildWorkspaceWatchSignature(workspacePath: string): Promise<string> {
+  try {
+    const snapshot = await listWorkspaceChanges(workspacePath)
+    return JSON.stringify({
+      branch: snapshot.branch,
+      upstream: snapshot.upstream,
+      ahead: snapshot.ahead,
+      behind: snapshot.behind,
+      hasRemote: snapshot.hasRemote,
+      publishRemote: snapshot.publishRemote,
+      changes: snapshot.changes.map((change) => ({
+        path: change.path,
+        status: change.status,
+        additions: change.additions,
+        deletions: change.deletions
+      }))
+    })
+  } catch {
+    const stat = await fs.stat(workspacePath).catch(() => null)
+    return `workspace:${stat?.mtimeMs ?? 0}`
+  }
+}
+
+function createPollingWorkspaceWatcher(
+  sender: WebContents,
+  ownerId: number,
+  watchId: string,
+  workspacePath: string
+): WorkspaceWatcherHandle {
+  let disposed = false
+  let inflight = false
+  let lastSignature = ''
+
+  void buildWorkspaceWatchSignature(workspacePath).then((signature) => {
+    lastSignature = signature
+  })
+
+  const timer = setInterval(() => {
+    if (disposed || inflight) {
+      return
+    }
+
+    if (sender.isDestroyed()) {
+      disposeWorkspaceWatchesForOwner(ownerId)
+      return
+    }
+
+    inflight = true
+    void buildWorkspaceWatchSignature(workspacePath)
+      .then((signature) => {
+        if (disposed) {
+          return
+        }
+
+        if (!lastSignature) {
+          lastSignature = signature
+          return
+        }
+
+        if (signature === lastSignature) {
+          return
+        }
+
+        lastSignature = signature
+        sender.send(harmonyChannels.workspaceDidChange, {
+          watchId,
+          workspacePath
+        } satisfies WorkspaceWatchEvent)
+      })
+      .finally(() => {
+        inflight = false
+      })
+  }, WORKSPACE_WATCH_POLL_INTERVAL_MS)
+
+  return {
+    close() {
+      disposed = true
+      clearInterval(timer)
+    }
+  }
+}
+
 function disposeWorkspaceWatch(watchId: string): void {
   const registration = workspaceWatchers.get(watchId)
   if (!registration) {
@@ -513,7 +600,7 @@ async function startWorkspaceWatch(sender: WebContents, workspacePath: string): 
   const ownerId = sender.id
   const rootPath = await resolveWorkspaceRoot(workspacePath)
   const watchPaths = await resolveGitWatchPaths(rootPath)
-  const watchers: FSWatcher[] = []
+  const watchers: WorkspaceWatcherHandle[] = []
   const watchId = randomUUID()
 
   const emitChange = (): void => {
@@ -537,7 +624,7 @@ async function startWorkspaceWatch(sender: WebContents, workspacePath: string): 
   }
 
   if (watchers.length === 0) {
-    throw new Error('Unable to watch workspace changes on this system.')
+    watchers.push(createPollingWorkspaceWatcher(sender, ownerId, watchId, rootPath))
   }
 
   const registration: WorkspaceWatchRegistration = {

@@ -2,6 +2,8 @@ appId: com.jiatastic.harmony
 productName: Harmony
 afterPack: scripts/prepare-mac-build.cjs
 afterSign: scripts/notarize.cjs
+extraMetadata:
+  name: harmony
 directories:
   buildResources: build
 files:
@@ -37,7 +39,6 @@ dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}
 linux:
   executableName: harmony
-  packageName: harmony
   target:
     - AppImage
     - deb

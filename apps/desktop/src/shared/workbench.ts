@@ -433,6 +433,7 @@ export interface AgentRun {
   command: string
   displayName: string
   externalSessionId?: string
+  suggestedTitle?: string
   status: AgentStatus
   startedAt: string
   finishedAt?: string

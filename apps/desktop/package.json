@@ -1,6 +1,6 @@
 {
   "name": "@harmony/desktop",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "private": true,
   "description": "Harmony desktop app for managing worktrees, terminals, and AI coding agents.",
   "main": "./out/main/index.js",
@@ -23,7 +23,7 @@
     "build:mac": "npm run build && electron-builder --mac --config.directories.output=/var/tmp/harmony-desktop-dist",
     "build:mac:unsigned": "npm run build && electron-builder --mac --config.mac.identity=null --config.mac.hardenedRuntime=false --config.directories.output=/var/tmp/harmony-desktop-dist",
     "release:mac": "npm run build && electron-builder --mac --publish always --config.directories.output=/var/tmp/harmony-desktop-dist",
-    "build:linux": "electron-vite build && electron-builder --linux"
+    "build:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -34,6 +34,7 @@
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
+    "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^22.19.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -46,6 +47,7 @@
     "electron-vite": "^5.0.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
+    "tailwindcss": "^4.2.2",
     "typescript": "^5.9.3",
     "vite": "^7.2.6"
   }

@@ -1972,16 +1972,14 @@ function App(): React.JSX.Element {
         </div>
       </header>
 
-      <div
-        className="layout"
-        style={layoutStyle}
-      >
+      <div className="layout" style={layoutStyle}>
         {/* ── Left: Workspaces ── */}
         {!isLeftCollapsed && (
           <div className="panel-left">
             <WorktreePanel
               workspaces={workspaces}
               openedTerminalsByWorkspace={openedTerminalsByWorkspace}
+              activeTerminalTabId={activeTerminalTab?.id ?? null}
               selectedPath={selectedWt}
               gitAvailability={gitAvailability}
               gitActionPending={isGitActionPending}

@@ -1085,6 +1085,15 @@ async function runClaudeCliCommand(args: string[]): Promise<string | null> {
 
   const shellPath = process.env.SHELL || '/bin/zsh'
   const claudeCliPath = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+  const claudeCliExists = await fs
+    .access(claudeCliPath)
+    .then(() => true)
+    .catch(() => false)
+
+  if (!claudeCliExists) {
+    return null
+  }
+
   const command = [
     'env',
     `PATH=${join(nodeBinary, '..')}:${process.env.PATH ?? ''}`,
@@ -1096,18 +1105,27 @@ async function runClaudeCliCommand(args: string[]): Promise<string | null> {
   ].join(' ')
 
   return await new Promise((resolveCommand) => {
-    const pty = spawnPty(shellPath, ['-lc', command], {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 32,
-      cwd: homedir(),
-      env: {
-        ...process.env,
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor',
-        PATH: `${join(nodeBinary, '..')}:${process.env.PATH ?? ''}`
-      }
-    })
+    let pty: ReturnType<typeof spawnPty>
+    try {
+      const { NO_COLOR: _noColor, ...baseEnv } = process.env
+      pty = spawnPty(shellPath, ['-lc', command], {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 32,
+        cwd: homedir(),
+        env: {
+          ...baseEnv,
+          TERM: 'xterm-256color',
+          COLORTERM: 'truecolor',
+          CLICOLOR: '1',
+          FORCE_COLOR: '1',
+          PATH: `${join(nodeBinary, '..')}:${process.env.PATH ?? ''}`
+        }
+      })
+    } catch {
+      resolveCommand(null)
+      return
+    }
 
     let output = ''
     const timer = setTimeout(() => {

@@ -89,6 +89,13 @@ type BrowserTab = {
 
 type PanelTab = TerminalTab | BrowserTab
 type TerminalVisualStatus = AgentRun['status'] | 'exited' | 'destroyed'
+type ThemeExtras = ITheme & {
+  selectionInactiveBackground?: string
+  scrollbarSliderBackground?: string
+  scrollbarSliderHoverBackground?: string
+  scrollbarSliderActiveBackground?: string
+  overviewRulerBorder?: string
+}
 
 const TERMINAL_LAYOUT_KEY = 'harmony-terminal-layout-v1'
 
@@ -121,7 +128,7 @@ function loadTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, 
             id: tab.id,
             type: 'terminal',
             workspacePath: tab.workspacePath,
-            title: tab.title,
+            title: sanitizeStoredTerminalTitle(tab.title, tab.workspacePath),
             customTitle: tab.customTitle === true,
             agent: tab.agent,
             agentViewMode: tab.agent ? (tab.agentViewMode ?? 'terminal') : 'terminal',
@@ -207,43 +214,193 @@ function cssVar(name: string, fallback: string): string {
 }
 
 function terminalTheme(): ITheme {
-  const background = cssVar('--terminal-surface', isDarkMode() ? '#262b34' : '#fbfcfd')
-  const foreground = cssVar('--terminal-foreground', isDarkMode() ? '#eef2f7' : '#20242b')
-  const accent = cssVar('--terminal-accent', isDarkMode() ? '#68b8d1' : '#2e8aa8')
-  const muted = cssVar('--terminal-muted', isDarkMode() ? '#98a2b3' : '#69707d')
-  const destructive = cssVar('--destructive', isDarkMode() ? '#f87171' : '#e45649')
-  const green = cssVar('--chart-3', isDarkMode() ? '#73d39c' : '#5e9b67')
-  const yellow = cssVar('--chart-5', isDarkMode() ? '#dfc06f' : '#b4872f')
-  const cyan = cssVar('--chart-2', isDarkMode() ? '#68b8d1' : '#2e8aa8')
-  const selection = cssVar(
-    '--terminal-selection',
-    isDarkMode() ? 'rgba(104,184,209,0.18)' : 'rgba(46,138,168,0.14)'
+  const background = cssVar('--terminal-surface', isDarkMode() ? '#0b0f14' : '#ffffff')
+  const foreground = cssVar('--terminal-foreground', isDarkMode() ? '#f0f6fc' : '#111827')
+  const cursor = cssVar('--terminal-cursor', isDarkMode() ? '#e6edf3' : '#111827')
+  const cursorText = cssVar('--terminal-cursor-text', isDarkMode() ? '#0b0f14' : '#ffffff')
+  const selection = cssVar('--terminal-selection', isDarkMode() ? '#264f78' : '#dbeafe')
+  const selectionInactive = cssVar(
+    '--terminal-selection-inactive',
+    isDarkMode() ? 'rgb(124 196 255 / 0.14)' : 'rgb(37 99 235 / 0.1)'
   )
+  const selectionText = cssVar('--terminal-selection-text', isDarkMode() ? '#f0f6fc' : '#111827')
+  const overviewRulerBorder = cssVar(
+    '--terminal-overview-ruler-border',
+    isDarkMode() ? 'rgb(148 163 184 / 0.14)' : 'rgb(148 163 184 / 0.18)'
+  )
+  const scrollbarSliderBackground = cssVar(
+    '--terminal-scrollbar-slider',
+    isDarkMode() ? 'rgb(148 163 184 / 0.2)' : 'rgb(71 85 105 / 0.18)'
+  )
+  const scrollbarSliderHoverBackground = cssVar(
+    '--terminal-scrollbar-slider-hover',
+    isDarkMode() ? 'rgb(148 163 184 / 0.32)' : 'rgb(71 85 105 / 0.28)'
+  )
+  const scrollbarSliderActiveBackground = cssVar(
+    '--terminal-scrollbar-slider-active',
+    isDarkMode() ? 'rgb(124 196 255 / 0.4)' : 'rgb(37 99 235 / 0.35)'
+  )
+  const black = cssVar('--terminal-ansi-black', isDarkMode() ? '#484f58' : '#111827')
+  const red = cssVar('--terminal-ansi-red', isDarkMode() ? '#ff7b72' : '#dc2626')
+  const green = cssVar('--terminal-ansi-green', isDarkMode() ? '#3fb950' : '#15803d')
+  const yellow = cssVar('--terminal-ansi-yellow', isDarkMode() ? '#d29922' : '#b45309')
+  const blue = cssVar('--terminal-ansi-blue', isDarkMode() ? '#58a6ff' : '#2563eb')
+  const magenta = cssVar('--terminal-ansi-magenta', isDarkMode() ? '#bc8cff' : '#c026d3')
+  const cyan = cssVar('--terminal-ansi-cyan', isDarkMode() ? '#39c5cf' : '#0891b2')
+  const white = cssVar('--terminal-ansi-white', isDarkMode() ? '#b1bac4' : '#475569')
+  const brightBlack = cssVar('--terminal-ansi-bright-black', isDarkMode() ? '#6e7681' : '#334155')
+  const brightRed = cssVar('--terminal-ansi-bright-red', isDarkMode() ? '#ffa198' : '#b91c1c')
+  const brightGreen = cssVar('--terminal-ansi-bright-green', isDarkMode() ? '#56d364' : '#166534')
+  const brightYellow = cssVar('--terminal-ansi-bright-yellow', isDarkMode() ? '#e3b341' : '#a16207')
+  const brightBlue = cssVar('--terminal-ansi-bright-blue', isDarkMode() ? '#79c0ff' : '#1d4ed8')
+  const brightMagenta = cssVar('--terminal-ansi-bright-magenta', isDarkMode() ? '#d2a8ff' : '#a21caf')
+  const brightCyan = cssVar('--terminal-ansi-bright-cyan', isDarkMode() ? '#56d4dd' : '#0e7490')
+  const brightWhite = cssVar('--terminal-ansi-bright-white', isDarkMode() ? '#f0f6fc' : '#0f172a')
 
-  return {
+  const theme: ThemeExtras = {
     background,
     foreground,
-    cursor: accent,
-    cursorAccent: background,
+    cursor,
+    cursorAccent: cursorText,
     selectionBackground: selection,
-    selectionForeground: foreground,
-    black: isDarkMode() ? '#1f242c' : '#e7eaee',
-    red: destructive,
+    selectionForeground: selectionText,
+    selectionInactiveBackground: selectionInactive,
+    overviewRulerBorder,
+    scrollbarSliderBackground,
+    scrollbarSliderHoverBackground,
+    scrollbarSliderActiveBackground,
+    black,
+    red,
     green,
     yellow,
-    blue: accent,
-    magenta: isDarkMode() ? '#b8a5d6' : '#8f76b8',
+    blue,
+    magenta,
     cyan,
-    white: foreground,
-    brightBlack: muted,
-    brightRed: destructive,
-    brightGreen: green,
-    brightYellow: yellow,
-    brightBlue: accent,
-    brightMagenta: isDarkMode() ? '#d3c5ea' : '#a78ecf',
-    brightCyan: cyan,
-    brightWhite: isDarkMode() ? '#ffffff' : '#111827'
+    white,
+    brightBlack,
+    brightRed,
+    brightGreen,
+    brightYellow,
+    brightBlue,
+    brightMagenta,
+    brightCyan,
+    brightWhite
   }
+
+  return theme
+}
+
+const OSC_TERMINATOR = '\u001b\\'
+
+function parseCssColorToRgb(value: string): [number, number, number] | null {
+  const normalized = value.trim()
+  if (!normalized) {
+    return null
+  }
+
+  const shortHexMatch = normalized.match(/^#([\da-f]{3})$/i)
+  if (shortHexMatch) {
+    return shortHexMatch[1].split('').map((chunk) => parseInt(chunk + chunk, 16)) as [
+      number,
+      number,
+      number
+    ]
+  }
+
+  const hexMatch = normalized.match(/^#([\da-f]{6})$/i)
+  if (hexMatch) {
+    return [
+      parseInt(hexMatch[1].slice(0, 2), 16),
+      parseInt(hexMatch[1].slice(2, 4), 16),
+      parseInt(hexMatch[1].slice(4, 6), 16)
+    ]
+  }
+
+  const rgbMatch = normalized.match(
+    /^rgba?\(\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})(?:\s*[,/]\s*[\d.]+\s*)?\)$/i
+  )
+  if (rgbMatch) {
+    return [rgbMatch[1], rgbMatch[2], rgbMatch[3]].map((chunk) =>
+      Math.max(0, Math.min(255, parseInt(chunk, 10)))
+    ) as [number, number, number]
+  }
+
+  return null
+}
+
+function toOscRgbString(value: string, fallback: string): string {
+  const [r, g, b] = parseCssColorToRgb(value) ?? parseCssColorToRgb(fallback) ?? [0, 0, 0]
+  const toChannel = (channel: number): string => channel.toString(16).padStart(2, '0').repeat(2)
+  return `rgb:${toChannel(r)}/${toChannel(g)}/${toChannel(b)}`
+}
+
+function terminalAnsiPalette(theme: ITheme): string[] {
+  return [
+    theme.black ?? '#000000',
+    theme.red ?? '#cd3131',
+    theme.green ?? '#0dbc79',
+    theme.yellow ?? '#e5e510',
+    theme.blue ?? '#2472c8',
+    theme.magenta ?? '#bc3fbc',
+    theme.cyan ?? '#11a8cd',
+    theme.white ?? '#e5e5e5',
+    theme.brightBlack ?? '#666666',
+    theme.brightRed ?? '#f14c4c',
+    theme.brightGreen ?? '#23d18b',
+    theme.brightYellow ?? '#f5f543',
+    theme.brightBlue ?? '#3b8eea',
+    theme.brightMagenta ?? '#d670d6',
+    theme.brightCyan ?? '#29b8db',
+    theme.brightWhite ?? '#ffffff'
+  ]
+}
+
+function inspectTerminalDomColors(host: HTMLDivElement, sessionId: string, dataSample: string): boolean {
+  const styleElements = Array.from(host.querySelectorAll('style'))
+  const styleSummaries = styleElements.map((element, index) => {
+    const text = element.textContent ?? ''
+    return {
+      index,
+      length: text.length,
+      hasFgRule: text.includes('.xterm-fg-1'),
+      hasBgRule: text.includes('.xterm-bg-1')
+    }
+  })
+
+  const coloredSpans = Array.from(
+    host.querySelectorAll<HTMLElement>('.xterm-rows span[class*="xterm-fg-"], .xterm-rows span[class*="xterm-bg-"]')
+  )
+  const sampledColoredSpans = coloredSpans.slice(0, 12).map((span) => ({
+    text: JSON.stringify(span.textContent ?? ''),
+    className: span.className,
+    color: getComputedStyle(span).color,
+    backgroundColor: getComputedStyle(span).backgroundColor
+  }))
+
+  const sampledPlainSpans = Array.from(host.querySelectorAll<HTMLElement>('.xterm-rows span'))
+    .slice(0, 12)
+    .map((span) => ({
+      text: JSON.stringify(span.textContent ?? ''),
+      className: span.className,
+      color: getComputedStyle(span).color,
+      backgroundColor: getComputedStyle(span).backgroundColor
+    }))
+
+  console.groupCollapsed(`[Harmony/xterm debug] session=${sessionId}`)
+  console.info('payload', {
+    containsAnsi: /\u001b\[[0-9;]*m/.test(dataSample),
+    sample: JSON.stringify(dataSample.slice(0, 160))
+  })
+  console.info('styleElements', styleSummaries)
+  console.info('coloredSpans', sampledColoredSpans)
+  console.info('plainSpans', sampledPlainSpans)
+  console.groupEnd()
+
+  return sampledColoredSpans.length > 0
+}
+
+function buildOscColorReply(sequence: string): string {
+  return `\u001b]${sequence}${OSC_TERMINATOR}`
 }
 
 function isDarkMode(): boolean {
@@ -272,62 +429,52 @@ function truncateTitle(value: string, max = 36): string {
   return `${compact.slice(0, max - 1)}…`
 }
 
-function extractTaskContext(command: string): string | null {
-  const value = command.trim()
-  if (!value) return null
-
-  const tokens = value.match(/"[^"]+"|'[^']+'|\S+/g) ?? []
-  if (tokens.length <= 1) return null
-
-  const ignored = new Set([
-    'opencode',
-    'codex',
-    'claude',
-    'gemini',
-    'agent',
-    'exec',
-    'task',
-    'run',
-    'npm',
-    'npx',
-    'bun'
-  ])
-
-  const cleaned = tokens
-    .slice(1)
-    .map((token) => token.replace(/^['"]|['"]$/g, '').trim())
-    .filter((token) => token && !token.startsWith('-'))
-
-  for (const token of cleaned) {
-    const lower = token.toLowerCase()
-    if (ignored.has(lower)) continue
-    if (token.length < 3) continue
-    return truncateTitle(token)
+function hasTerminalControlArtifacts(value: string): boolean {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (!compact) {
+    return false
   }
 
-  return null
+  return [
+    /^corrupted terminal input$/i,
+    /^\[[0-9;?]*[A-Za-z]/,
+    /\[[0-9;?]*c\b/,
+    /\[[0-9;?]*R\b/,
+    /\[[0-9;?]*n\b/,
+    /]\d+;rgb:/i,
+    /\brgb:[0-9a-f]{2,4}\/[0-9a-f]{2,4}\/[0-9a-f]{2,4}\b/i,
+    /\b(?:\?1;2c|4;\d+;\?|10;\?|11;\?|12;\?)\b/
+  ].some((pattern) => pattern.test(compact))
 }
 
-function buildTaskAwareTitle(tab: TerminalTab, run: AgentRun): string {
-  const displayName = truncateTitle(run.displayName || tab.agent?.name || tab.title)
-  const context = extractTaskContext(run.command)
-  if (!context) {
-    return truncateTitle(`${displayName} · ${leaf(tab.workspacePath)}`)
+function sanitizeStoredTerminalTitle(title: string, workspacePath: string): string {
+  const normalized = stripAnsi(title)
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized || hasTerminalControlArtifacts(normalized)) {
+    return leaf(workspacePath)
   }
-  if (context.toLowerCase() === displayName.toLowerCase()) {
-    return displayName
-  }
-  return truncateTitle(`${displayName}: ${context}`)
+
+  return truncateTitle(normalized, 48)
 }
 
 function normalizeTerminalTitle(rawTitle: string, workspacePath: string, fallbackTitle: string): string | null {
-  const title = stripAnsi(rawTitle).replace(/\s+/g, ' ').trim()
+  const title = stripAnsi(rawTitle)
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
   if (!title) {
     return null
   }
 
   const lower = title.toLowerCase()
   if (lower.includes('harmony-') && (lower.includes(':zsh') || lower.includes(':bash'))) {
+    return null
+  }
+
+  if (hasTerminalControlArtifacts(title)) {
     return null
   }
 
@@ -521,13 +668,10 @@ function BrowserPane({ tab, visible, onDraftChange, onNavigate }: BrowserPanePro
     const el = webviewRef.current
     if (!el) return
 
-    // Webviews can stay black after being hidden or first attached in a tabbed layout.
-    // Re-assert the current URL when the pane becomes visible so Chromium repaints it.
+    // Re-assert the URL when needed, but avoid forced reloads that wipe page state.
     window.requestAnimationFrame(() => {
       if (el.src !== tab.url) {
         el.src = tab.url
-      } else if (typeof el.reload === 'function') {
-        el.reload()
       }
     })
   }, [tab.url, visible])
@@ -676,6 +820,7 @@ function TerminalHost({
   const fitRef = useRef<FitAddon | null>(null)
   const sessionRef = useRef<TerminalSession | null>(null)
   const didStartAgentRef = useRef(false)
+  const colorDebugLoggedRef = useRef(false)
   const wheelRemainderRef = useRef(0)
   const onSessionChangeRef = useRef(onSessionChange)
   const onRuntimeStateChangeRef = useRef(onRuntimeStateChange)
@@ -722,12 +867,12 @@ function TerminalHost({
       cursorBlink: true,
       cursorStyle: 'block',
       cursorInactiveStyle: 'outline',
-      fontFamily: `${cssVar('--font-mono', "'Fira Code', monospace")}, 'SF Mono', Menlo, monospace`,
-      fontSize: 13,
+      fontFamily: `'SF Mono', SFMono-Regular, ui-monospace, ${cssVar('--font-mono', "'Fira Code', monospace")}, Menlo, monospace`,
+      fontSize: 14,
       fontWeight: '500',
-      lineHeight: 1.36,
-      letterSpacing: 0.15,
-      minimumContrastRatio: 1.1,
+      lineHeight: 1.28,
+      letterSpacing: 0,
+      minimumContrastRatio: 1,
       scrollback: 5000,
       theme: terminalTheme()
     })
@@ -736,6 +881,74 @@ function TerminalHost({
     fitRef.current = fit
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
+    const oscDisposables = [
+      term.parser.registerOscHandler(4, (data) => {
+        const session = sessionRef.current
+        if (!session) {
+          return false
+        }
+
+        const palette = terminalAnsiPalette(terminalTheme())
+        const slots = data.split(';')
+        const reports: string[] = []
+        while (slots.length > 1) {
+          const index = Number.parseInt(slots.shift() ?? '', 10)
+          const spec = slots.shift()
+          if (!Number.isInteger(index) || index < 0 || index >= palette.length || spec !== '?') {
+            continue
+          }
+          reports.push(`4;${index};${toOscRgbString(palette[index], '#000000')}`)
+        }
+
+        if (!reports.length) {
+          return false
+        }
+
+        for (const report of reports) {
+          window.api.writeTerminal(session.sessionId, buildOscColorReply(report))
+        }
+        return true
+      }),
+      term.parser.registerOscHandler(10, (data) => {
+        const session = sessionRef.current
+        if (!session || data !== '?') {
+          return false
+        }
+
+        const theme = terminalTheme()
+        window.api.writeTerminal(
+          session.sessionId,
+          buildOscColorReply(`10;${toOscRgbString(theme.foreground ?? '#111827', '#111827')}`)
+        )
+        return true
+      }),
+      term.parser.registerOscHandler(11, (data) => {
+        const session = sessionRef.current
+        if (!session || data !== '?') {
+          return false
+        }
+
+        const theme = terminalTheme()
+        window.api.writeTerminal(
+          session.sessionId,
+          buildOscColorReply(`11;${toOscRgbString(theme.background ?? '#ffffff', '#ffffff')}`)
+        )
+        return true
+      }),
+      term.parser.registerOscHandler(12, (data) => {
+        const session = sessionRef.current
+        if (!session || data !== '?') {
+          return false
+        }
+
+        const theme = terminalTheme()
+        window.api.writeTerminal(
+          session.sessionId,
+          buildOscColorReply(`12;${toOscRgbString(theme.cursor ?? '#111827', '#111827')}`)
+        )
+        return true
+      })
+    ]
     term.attachCustomWheelEventHandler((event) => {
       // Always map trackpad/mouse wheel gestures to the xterm viewport so they
       // scroll terminal history instead of being forwarded to the shell app.
@@ -785,7 +998,22 @@ function TerminalHost({
 
     const offData = window.api.onTerminalData((ev) => {
       if (ev.sessionId === sessionRef.current?.sessionId) {
-        term.write(ev.data)
+        term.write(ev.data, () => {
+          if (colorDebugLoggedRef.current) {
+            return
+          }
+
+          window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+              const currentSessionId = sessionRef.current?.sessionId
+              if (!currentSessionId || currentSessionId !== ev.sessionId || !host.isConnected) {
+                return
+              }
+
+              colorDebugLoggedRef.current = inspectTerminalDomColors(host, currentSessionId, ev.data)
+            })
+          })
+        })
         onOutputDataRef.current?.(ev.data)
       }
     })
@@ -897,7 +1125,11 @@ function TerminalHost({
       sessionRef.current = null
       fitRef.current = null
       xtermRef.current = null
+      colorDebugLoggedRef.current = false
       wheelRemainderRef.current = 0
+      for (const disposable of oscDisposables) {
+        disposable.dispose()
+      }
       term.dispose()
     }
   }, [agent?.command, agent?.name, restartNonce, tabId, workspacePath])
@@ -926,11 +1158,15 @@ export function TerminalPanel({
   )
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+  const [launchingAgent, setLaunchingAgent] = useState<AvailableAgent | null>(null)
+  const [agentTaskDraft, setAgentTaskDraft] = useState('')
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
   const initializedWorkspacesRef = useRef(new Set(tabs.map((tab) => tab.workspacePath)))
   const renameInputRef = useRef<HTMLInputElement | null>(null)
+  const agentTaskInputRef = useRef<HTMLInputElement | null>(null)
   const terminalInputBuffersRef = useRef<Record<string, string>>({})
   const terminalEchoSuppressionsRef = useRef<Record<string, string>>({})
+  const handledRequestedActiveTabNonceRef = useRef<number | null>(null)
 
   const currentWorkspaceTabs = useMemo(
     () => (workspacePath ? tabs.filter((tab) => tab.workspacePath === workspacePath) : []),
@@ -1082,6 +1318,10 @@ export function TerminalPanel({
       return
     }
 
+    if (handledRequestedActiveTabNonceRef.current === requestedActiveTab.nonce) {
+      return
+    }
+
     if (
       !tabs.some(
         (tab) => tab.type === 'terminal' && tab.workspacePath === requestedActiveTab.workspacePath && tab.id === requestedActiveTab.tabId
@@ -1095,6 +1335,7 @@ export function TerminalPanel({
         ? prev
         : { ...prev, [requestedActiveTab.workspacePath]: requestedActiveTab.tabId }
     )
+    handledRequestedActiveTabNonceRef.current = requestedActiveTab.nonce
   }, [requestedActiveTab, tabs])
 
   useEffect(() => {
@@ -1107,6 +1348,17 @@ export function TerminalPanel({
       renameInputRef.current?.select()
     })
   }, [renamingTabId])
+
+  useEffect(() => {
+    if (!launchingAgent) {
+      return
+    }
+
+    window.requestAnimationFrame(() => {
+      agentTaskInputRef.current?.focus()
+      agentTaskInputRef.current?.select()
+    })
+  }, [launchingAgent])
 
   useEffect(() => {
     onOpenTerminalsChange?.(
@@ -1268,17 +1520,19 @@ export function TerminalPanel({
   }, [workspacePath])
 
   const launchAgent = useCallback(
-    (agent: AvailableAgent) => {
+    (agent: AvailableAgent, taskName: string) => {
       const cwd = workspacePath ?? firstTerminalWorkspace
       if (!cwd) return
       const id = uuid()
+      const title = truncateTitle(taskName, 48)
       setTabs((prev) => [
         ...prev,
         {
           id,
           type: 'terminal',
           workspacePath: cwd,
-          title: agent.name,
+          title,
+          customTitle: true,
           agent,
           agentViewMode: 'terminal',
           chatMessages: [],
@@ -1291,6 +1545,31 @@ export function TerminalPanel({
     },
     [firstTerminalWorkspace, workspacePath]
   )
+
+  const openAgentLaunchDialog = useCallback((agent: AvailableAgent): void => {
+    setLaunchingAgent(agent)
+    setAgentTaskDraft('')
+  }, [])
+
+  const cancelAgentLaunchDialog = useCallback((): void => {
+    setLaunchingAgent(null)
+    setAgentTaskDraft('')
+  }, [])
+
+  const confirmAgentLaunch = useCallback((): void => {
+    if (!launchingAgent) {
+      return
+    }
+
+    const nextTitle = truncateTitle(agentTaskDraft, 48)
+    if (!nextTitle.trim()) {
+      return
+    }
+
+    launchAgent(launchingAgent, nextTitle)
+    setLaunchingAgent(null)
+    setAgentTaskDraft('')
+  }, [agentTaskDraft, launchingAgent, launchAgent])
 
   const closeTab = useCallback(
     (id: string): void => {
@@ -1370,8 +1649,7 @@ export function TerminalPanel({
             ? {
                 ...tab,
                 agentRun: run,
-                lastKnownStatus: run.status,
-                title: tab.customTitle ? tab.title : buildTaskAwareTitle(tab, run)
+                lastKnownStatus: run.status
               }
             : tab
         )
@@ -1499,25 +1777,16 @@ export function TerminalPanel({
 
       {availableAgents.length > 0 && (
         <div className="agent-launchers">
-          <div className="agent-launchers-header">
-            <div className="agent-launchers-heading">
-              <div className="agent-launchers-title-row">
-                <span className="agent-launchers-title">AI Workspace</span>
-                <span className="agent-launchers-context">{leaf(workspacePath)}</span>
-              </div>
-              <div className="agent-launchers-copy">
-                Launch a coding agent directly inside this workspace without leaving the terminal surface.
-              </div>
-            </div>
-          </div>
+          <div className="agent-launchers-title">Launch your agent</div>
           <div className="agent-launcher-list">
             {availableAgents.map((agent) => (
               <button
                 key={agent.id}
                 type="button"
                 className="agent-launcher"
-                onClick={() => launchAgent(agent)}
+                onClick={() => openAgentLaunchDialog(agent)}
                 disabled={!workspacePath}
+                title={workspacePath ? `Launch ${agent.name} in ${leaf(workspacePath)}` : `Launch ${agent.name}`}
               >
                 <AgentIcon id={agent.id} />
                 <span className="agent-launcher-copy">
@@ -1529,7 +1798,82 @@ export function TerminalPanel({
         </div>
       )}
 
-      <div className="terminal-panes">
+      {launchingAgent && (
+        <div
+          className="agent-task-overlay"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              cancelAgentLaunchDialog()
+            }
+          }}
+        >
+          <div
+            className="agent-task-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-task-title"
+          >
+            <div className="agent-task-title-row">
+              <div>
+                <div id="agent-task-title" className="agent-task-title">
+                  Name the task
+                </div>
+                <div className="agent-task-copy">
+                  This will be used as the fixed title for the new {launchingAgent.name} tab.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="agent-task-close"
+                aria-label="Close task name dialog"
+                onClick={cancelAgentLaunchDialog}
+              >
+                ×
+              </button>
+            </div>
+            <input
+              ref={agentTaskInputRef}
+              className="agent-task-input"
+              type="text"
+              placeholder="Enter a task name"
+              value={agentTaskDraft}
+              onChange={(event) => setAgentTaskDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  confirmAgentLaunch()
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  cancelAgentLaunchDialog()
+                }
+              }}
+            />
+            <div className="agent-task-actions">
+              <button
+                type="button"
+                className="agent-task-btn"
+                onClick={cancelAgentLaunchDialog}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="agent-task-btn is-primary"
+                onClick={confirmAgentLaunch}
+                disabled={!agentTaskDraft.trim()}
+              >
+                Launch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div
+        className="terminal-panes"
+        style={{ display: currentWorkspaceTabs.length === 0 ? 'none' : 'flex' }}
+      >
         {tabs.map((tab) => (
           tab.type === 'terminal' ? (
             <div

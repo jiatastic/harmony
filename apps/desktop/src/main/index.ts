@@ -29,9 +29,43 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
+  let shown = false
+  const showWindow = (): void => {
+    if (shown || mainWindow.isDestroyed()) {
+      return
+    }
+
+    shown = true
     mainWindow.show()
+  }
+
+  mainWindow.on('ready-to-show', () => {
+    showWindow()
   })
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    showWindow()
+  })
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error('Renderer failed to load', {
+      errorCode,
+      errorDescription,
+      validatedURL
+    })
+    showWindow()
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('Renderer process exited', details)
+  })
+
+  // In development, don't hide the entire app behind renderer startup issues.
+  if (is.dev) {
+    setTimeout(() => {
+      showWindow()
+    }, 1500)
+  }
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)

@@ -135,6 +135,7 @@ function createLocalProcess(payload: CreateTerminalPayload, cwd: string): {
   shellLabel: string
 } {
   const colorFgBg = payload.themeHint === 'light' ? '0;15' : '15;0'
+  const { NO_COLOR: _noColor, ...baseEnv } = process.env
   const { shell, args } = getShellLaunch()
   const initialCommand = payload.initialCommand?.trim()
   const spawnArgs = initialCommand
@@ -155,10 +156,12 @@ function createLocalProcess(payload: CreateTerminalPayload, cwd: string): {
       rows: 32,
       cwd,
       env: {
-        ...process.env,
+        ...baseEnv,
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
-        COLORFGBG: colorFgBg
+        COLORFGBG: colorFgBg,
+        CLICOLOR: '1',
+        FORCE_COLOR: '1'
       }
     })
   )

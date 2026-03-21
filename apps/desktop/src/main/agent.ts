@@ -249,6 +249,8 @@ export function handleAgentTerminalData(sessionId: string, ownerId: number, data
     return
   }
 
+  const hasVisibleOutput = data.trim().length > 0
+
   run.recentOutput = `${run.recentOutput}${data}`.slice(-4000)
 
   if (!run.externalSessionId) {
@@ -259,12 +261,19 @@ export function handleAgentTerminalData(sessionId: string, ownerId: number, data
     }
   }
 
+  if (run.status === 'done' && hasVisibleOutput) {
+    run.awaitingResponse = true
+    run.finishedAt = undefined
+    run.exitCode = undefined
+    run.signal = undefined
+  }
+
   if (run.awaitingResponse && WAITING_PATTERNS.some((pattern) => pattern.test(data))) {
     markRunWaiting(run)
     return
   }
 
-  if (run.awaitingResponse && data.trim()) {
+  if (run.awaitingResponse && hasVisibleOutput) {
     run.sawOutputSincePrompt = true
     markRunRunning(run)
     scheduleCompletion(run)

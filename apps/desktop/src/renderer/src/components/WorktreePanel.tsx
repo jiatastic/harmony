@@ -6,6 +6,7 @@ export type WorkspaceItem = WorktreeSummary & { isOpenedFolder?: boolean }
 interface WorktreePanelProps {
   workspaces: WorkspaceItem[]
   openedTerminalsByWorkspace?: Record<string, Array<{ id: string; title: string; status?: string; isAgent?: boolean }>>
+  activeTerminalTabId?: string | null
   selectedPath: string | null
   gitAvailability: GitAvailability | null
   gitActionPending: boolean
@@ -24,6 +25,31 @@ function stripBranchSuffix(name: string): string {
 
 function leafPath(path: string): string {
   return path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? path
+}
+
+function sanitizeOpenTerminalLabel(title: string, workspacePath: string): string {
+  const normalized = title
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) {
+    return leafPath(workspacePath)
+  }
+
+  const looksCorrupted =
+    normalized.toLowerCase() === 'corrupted terminal input' ||
+    /^\[[0-9;?]*[A-Za-z]/.test(normalized) ||
+    /\[[0-9;?]*c\b/.test(normalized) ||
+    /\[[0-9;?]*R\b/.test(normalized) ||
+    /]\d+;rgb:/i.test(normalized) ||
+    /\brgb:[0-9a-f]{2,4}\/[0-9a-f]{2,4}\/[0-9a-f]{2,4}\b/i.test(normalized)
+
+  if (looksCorrupted) {
+    return leafPath(workspacePath)
+  }
+
+  return normalized
 }
 
 function terminalStatusLabel(status?: string, isAgent?: boolean): string | null {
@@ -47,6 +73,10 @@ function terminalStatusLabel(status?: string, isAgent?: boolean): string | null 
   }
 }
 
+function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
 /** Highlight the matched portion of `text` given a search `query`. */
 function Highlight({ text, query }: { text: string; query: string }): React.JSX.Element {
   if (!query) return <>{text}</>
@@ -64,6 +94,7 @@ function Highlight({ text, query }: { text: string; query: string }): React.JSX.
 export function WorktreePanel({
   workspaces,
   openedTerminalsByWorkspace,
+  activeTerminalTabId,
   selectedPath,
   gitAvailability,
   gitActionPending,
@@ -278,24 +309,32 @@ export function WorktreePanel({
 
     return (
       <div className="wt-open-terminals" role="list" aria-label="Opened terminals">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className="wt-open-terminal-chip"
-            type="button"
-            role="listitem"
-            title={tab.title}
-            onClick={() => onOpenTerminalTab(workspacePath, tab.id)}
-          >
-            {terminalStatusLabel(tab.status, tab.isAgent) && (
-              <span className={`wt-open-terminal-status${tab.status ? ` is-${tab.status}` : ''}`}>
-                <span className={`wt-open-terminal-dot${tab.status ? ` is-${tab.status}` : ''}`} aria-hidden="true" />
-                {terminalStatusLabel(tab.status, tab.isAgent)}
-              </span>
-            )}
-            <span className="wt-open-terminal-name">{tab.title}</span>
-          </button>
-        ))}
+        {tabs.map((tab) => {
+          const isActive = workspacePath === selectedPath && tab.id === activeTerminalTabId
+          const safeTitle = sanitizeOpenTerminalLabel(tab.title, workspacePath)
+          const status = terminalStatusLabel(tab.status, tab.isAgent)
+
+          return (
+            <button
+              key={tab.id}
+              className={`wt-open-terminal-row${isActive ? ' is-active' : ''}`}
+              type="button"
+              role="listitem"
+              title={safeTitle}
+              aria-pressed={isActive}
+              onClick={() => onOpenTerminalTab(workspacePath, tab.id)}
+            >
+              {status ? (
+                <span className={`wt-open-terminal-status wt-open-terminal-status--${tab.status ?? 'idle'}`}>
+                  {status}
+                </span>
+              ) : (
+                <span className="wt-open-terminal-status wt-open-terminal-status--shell">Shell</span>
+              )}
+              <span className="wt-open-terminal-name">{safeTitle}</span>
+            </button>
+          )
+        })}
       </div>
     )
   }
@@ -305,7 +344,6 @@ export function WorktreePanel({
       <div className="section-header">
         <div>
           <div className="section-label">Workspaces</div>
-          <div className="section-title">Projects</div>
         </div>
         <div className="section-header-actions">
           <button
@@ -316,7 +354,8 @@ export function WorktreePanel({
             title="Open folder"
             onClick={() => void handleOpenFolder()}
           >
-            +
+            <span aria-hidden="true">+</span>
+            <span>Open</span>
           </button>
         </div>
       </div>
@@ -351,40 +390,23 @@ export function WorktreePanel({
         {repoGroups.map((group) => (
           <div key={group.repoRoot} className="wt-group">
             <div className="wt-group-hd">
-              <svg
-                className="wt-group-icon"
-                width="12"
-                height="12"
-                viewBox="0 0 16 16"
-                fill="none"
-                aria-hidden="true"
-              >
-                <circle cx="4" cy="4" r="2" stroke="currentColor" strokeWidth="1.5" />
-                <circle cx="4" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" />
-                <circle cx="12" cy="4" r="2" stroke="currentColor" strokeWidth="1.5" />
-                <path
-                  d="M4 6v4M4 6c0 2 8 2 8-2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
               <span className="wt-group-name">{group.repoName}</span>
-              <span className="badge">{group.items.length}</span>
               <button
                 className="wt-group-add"
                 type="button"
                 aria-label="Add branch worktree"
-                title="New branch"
+                title="Add branch"
                 onClick={() => openCreate(group.repoRoot)}
               >
                 +
               </button>
             </div>
+            <div className="wt-group-list">
             {group.items.map((ws) => {
               const active = ws.path === selectedPath
+              const openCount = openedTerminalsByWorkspace?.[ws.path]?.length ?? 0
               return (
-                <div key={ws.path} className="wt-branch-block">
+                <div key={ws.path} className={`wt-branch-card${active ? ' is-active' : ''}`}>
                   <div className={`wt-branch-row${active ? ' is-active' : ''}`}>
                     <button
                       className="wt-branch-select"
@@ -393,10 +415,14 @@ export function WorktreePanel({
                     >
                       <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
                       <span className="wt-branch-name">{ws.branch}</span>
+                      {ws.isMain ? (
+                        <span className="wt-main-badge">root</span>
+                      ) : null}
+                      <span className="wt-branch-meta">
+                        {openCount > 0 ? formatCount(openCount, 'session') : ''}
+                      </span>
                     </button>
-                    {ws.isMain ? (
-                      <span className="wt-main-badge">main</span>
-                    ) : (
+                    {ws.isMain ? null : (
                       <button
                         className="wt-remove-btn"
                         type="button"
@@ -414,6 +440,7 @@ export function WorktreePanel({
                 </div>
               )
             })}
+            </div>
 
             {showCreate && createContextPath === group.repoRoot && renderCreatePicker()}
           </div>
@@ -423,27 +450,14 @@ export function WorktreePanel({
         {folderItems.length > 0 && (
           <div className="wt-group">
             <div className="wt-group-hd">
-              <svg
-                className="wt-group-icon"
-                width="12"
-                height="12"
-                viewBox="0 0 16 16"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M1 4a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293L8.414 4.5A1 1 0 0 0 9.121 4.793H14a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4Z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
               <span className="wt-group-name">Folders</span>
-              <span className="badge">{folderItems.length}</span>
             </div>
+            <div className="wt-group-list">
             {folderItems.map((ws) => {
               const active = ws.path === selectedPath
+              const openCount = openedTerminalsByWorkspace?.[ws.path]?.length ?? 0
               return (
-                <div key={ws.path} className="wt-branch-block">
+                <div key={ws.path} className={`wt-branch-card${active ? ' is-active' : ''}`}>
                   <div className={`wt-branch-row${active ? ' is-active' : ''}`}>
                     <button
                       className="wt-branch-select"
@@ -452,6 +466,9 @@ export function WorktreePanel({
                     >
                       <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
                       <span className="wt-branch-name">{ws.name}</span>
+                      <span className="wt-branch-meta">
+                        {openCount > 0 ? formatCount(openCount, 'session') : 'folder'}
+                      </span>
                     </button>
                     <button
                       className="wt-remove-btn"
@@ -469,6 +486,7 @@ export function WorktreePanel({
                 </div>
               )
             })}
+            </div>
           </div>
         )}
 
