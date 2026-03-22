@@ -5,7 +5,7 @@ export type WorkspaceItem = WorktreeSummary & { isOpenedFolder?: boolean }
 
 interface WorktreePanelProps {
   workspaces: WorkspaceItem[]
-  openedTerminalsByWorkspace?: Record<string, Array<{ id: string; title: string; status?: string; isAgent?: boolean }>>
+  openedTerminalsByWorkspace?: Record<string, Array<{ id: string; title: string; status?: string; message?: string; isAgent?: boolean }>>
   activeTerminalTabId?: string | null
   selectedPath: string | null
   gitAvailability: GitAvailability | null
@@ -52,9 +52,29 @@ function sanitizeOpenTerminalLabel(title: string, workspacePath: string): string
   return normalized
 }
 
-function terminalStatusLabel(status?: string, isAgent?: boolean): string | null {
+function terminalStatusLabel(status?: string, message?: string, isAgent?: boolean): string | null {
   if (!isAgent) {
     return null
+  }
+
+  const normalizedMessage = message?.trim().toLowerCase()
+
+  if (normalizedMessage) {
+    if (normalizedMessage.includes('starting')) {
+      return 'working'
+    }
+    if (normalizedMessage.includes('waiting for input')) {
+      return 'waiting'
+    }
+    if (normalizedMessage.includes('completed')) {
+      return 'completed'
+    }
+    if (normalizedMessage.includes('working')) {
+      return 'working'
+    }
+    if (normalizedMessage.includes('exited with code') || normalizedMessage.includes('error')) {
+      return 'failed'
+    }
   }
 
   switch (status) {
@@ -65,7 +85,7 @@ function terminalStatusLabel(status?: string, isAgent?: boolean): string | null 
     case 'waiting':
       return 'waiting'
     case 'done':
-      return 'ready'
+      return 'completed'
     case 'error':
       return 'failed'
     default:
@@ -312,7 +332,7 @@ export function WorktreePanel({
         {tabs.map((tab) => {
           const isActive = workspacePath === selectedPath && tab.id === activeTerminalTabId
           const safeTitle = sanitizeOpenTerminalLabel(tab.title, workspacePath)
-          const status = terminalStatusLabel(tab.status, tab.isAgent)
+          const status = terminalStatusLabel(tab.status, tab.message, tab.isAgent)
 
           return (
             <button
@@ -415,9 +435,6 @@ export function WorktreePanel({
                     >
                       <span className={`wt-branch-dot${active ? ' is-active' : ''}`} aria-hidden="true" />
                       <span className="wt-branch-name">{ws.branch}</span>
-                      {ws.isMain ? (
-                        <span className="wt-main-badge">root</span>
-                      ) : null}
                       <span className="wt-branch-meta">
                         {openCount > 0 ? formatCount(openCount, 'session') : ''}
                       </span>

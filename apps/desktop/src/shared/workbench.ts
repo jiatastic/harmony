@@ -1,3 +1,8 @@
+import type {
+  TerminalDaemonSessionPatch,
+  TerminalDaemonSessionRecord
+} from './terminalDaemon'
+
 export type WorkspaceEntryKind = 'file' | 'directory'
 
 export interface BranchInfo {
@@ -160,7 +165,15 @@ export const harmonyChannels = {
   detachTerminal: 'terminal:detach',
   destroyTerminal: 'terminal:destroy',
   destroyPersistentTerminal: 'terminal:destroyPersistent',
+  listTerminalSessions: 'terminal:listSessions',
+  updateTerminalSessionMetadata: 'terminal:updateSessionMetadata',
+  getPersistentShellSupport: 'terminal:getPersistentShellSupport',
+  getPersistedTerminalLayout: 'terminalLayout:get',
+  savePersistedTerminalLayout: 'terminalLayout:save',
+  getArchivedTabs: 'terminalArchive:get',
+  saveArchivedTabs: 'terminalArchive:save',
   startAgent: 'agent:start',
+  restoreAgent: 'agent:restore',
   terminalData: 'terminal:data',
   terminalExit: 'terminal:exit',
   terminalState: 'terminal:state',
@@ -382,9 +395,51 @@ export interface TerminalSession {
   shell: string
   state: TerminalLifecycleState
   attached: boolean
+  restored?: boolean
+  snapshot?: string
   exitCode?: number
   signal?: number
 }
+
+export type PersistedTerminalTab = {
+  id: string
+  type: 'terminal'
+  workspacePath: string
+  title: string
+  customTitle?: boolean
+  agent?: AvailableAgent
+  agentRun?: AgentRun
+  agentViewMode?: 'chat' | 'terminal'
+  lastKnownStatus?: AgentRun['status']
+}
+
+export type PersistedBrowserTab = {
+  id: string
+  type: 'browser'
+  workspacePath: string
+  title: string
+  url: string
+  draftUrl: string
+  customTitle?: boolean
+}
+
+export type PersistedPanelTab = PersistedTerminalTab | PersistedBrowserTab
+
+export interface PersistedTerminalLayout {
+  tabs: PersistedPanelTab[]
+  activeTabIds: Record<string, string | null>
+}
+
+export type ArchivedTerminalTab = PersistedTerminalTab & {
+  archivedAt: string
+  archivedSessionId?: string
+}
+
+export type ArchivedBrowserTab = PersistedBrowserTab & {
+  archivedAt: string
+}
+
+export type ArchivedPanelTab = ArchivedTerminalTab | ArchivedBrowserTab
 
 export interface AvailableAgent {
   id: string
@@ -401,8 +456,17 @@ export interface GitAvailability {
   canAutoInstall: boolean
 }
 
+export interface PersistentShellSupport {
+  available: boolean
+  required: boolean
+  binaryPath: string | null
+  reason?: string
+  installHint?: string
+}
+
 export interface TerminalDataEvent {
   sessionId: string
+  sessionKey?: string
   data: string
 }
 
@@ -424,6 +488,22 @@ export interface AgentStartPayload {
   workspacePath: string
   command: string
   displayName?: string
+  suggestedTitle?: string
+}
+
+export interface AgentRestorePayload {
+  sessionId: string
+  workspacePath: string
+  command: string
+  displayName?: string
+  externalSessionId?: string
+  suggestedTitle?: string
+  status?: AgentStatus
+  startedAt?: string
+  finishedAt?: string
+  exitCode?: number
+  signal?: number
+  message?: string
 }
 
 export interface AgentRun {
@@ -469,12 +549,23 @@ export interface HarmonyApi {
   generateCommitMessage(payload: GenerateCommitMessagePayload): Promise<GenerateCommitMessageResult>
   getWorkspaceDiff(payload: WorkspaceDiffPayload): Promise<WorkspaceDiffResult>
   createTerminal(payload: CreateTerminalPayload): Promise<TerminalSession>
+  listTerminalSessions(): Promise<TerminalDaemonSessionRecord[]>
+  updateTerminalSessionMetadata(
+    sessionId: string,
+    patch: TerminalDaemonSessionPatch
+  ): Promise<TerminalDaemonSessionRecord>
+  getPersistentShellSupport(): Promise<PersistentShellSupport>
+  getPersistedTerminalLayout(): Promise<PersistedTerminalLayout>
+  savePersistedTerminalLayout(layout: PersistedTerminalLayout): Promise<void>
+  getArchivedTabs(): Promise<ArchivedPanelTab[]>
+  saveArchivedTabs(tabs: ArchivedPanelTab[]): Promise<void>
   writeTerminal(sessionId: string, data: string): void
   resizeTerminal(sessionId: string, cols: number, rows: number): void
   detachTerminal(sessionId: string): void
   destroyTerminal(sessionId: string): void
   destroyPersistentTerminal(persistentId: string): void
   startAgent(payload: AgentStartPayload): Promise<AgentRun>
+  restoreAgent(payload: AgentRestorePayload): Promise<AgentRun>
   onTerminalData(listener: (event: TerminalDataEvent) => void): () => void
   onTerminalExit(listener: (event: TerminalExitEvent) => void): () => void
   onTerminalState(listener: (event: TerminalStateEvent) => void): () => void

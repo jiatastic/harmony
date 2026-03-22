@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
+import { accessSync, constants as fsConstants } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import * as https from 'node:https'
 import { homedir } from 'node:os'
@@ -32,7 +33,14 @@ import {
 } from '../shared/workbench'
 import { ensureBundledSkillsInstalled } from './bundledSkills'
 import { getGitAvailability, installGit, runGitCommand } from './git'
+import {
+  getArchivedTabs,
+  getPersistedTerminalLayout,
+  saveArchivedTabs,
+  savePersistedTerminalLayout
+} from './sessionStore'
 import { registerSourceControlIpc } from './sourceControl'
+import { getPersistentShellSupport } from './terminalRuntime'
 import { disposeWorkspaceWatches, registerWorktreeIpc } from './worktree'
 
 let detachTerminalDataListener: (() => void) | null = null
@@ -42,6 +50,31 @@ let detachTerminalInputListener: (() => void) | null = null
 const SKILLS_SH_BASE_URL = 'https://skills.sh'
 const SEARCH_LIMIT_DEFAULT = 20
 const SEARCH_LIMIT_MAX = 50
+
+function resolveRunnableShell(): string {
+  if (process.platform === 'win32') {
+    return process.env.ComSpec || 'powershell.exe'
+  }
+
+  const candidates = Array.from(
+    new Set([process.env.SHELL, '/bin/zsh', '/bin/bash'].filter((value): value is string => Boolean(value)))
+  )
+
+  for (const candidate of candidates) {
+    if (!candidate.includes('/')) {
+      return candidate
+    }
+
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      return candidate
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return '/bin/zsh'
+}
 
 interface SkillsShSearchResponse {
   query?: string
@@ -1083,7 +1116,7 @@ async function runClaudeCliCommand(args: string[]): Promise<string | null> {
     return null
   }
 
-  const shellPath = process.env.SHELL || '/bin/zsh'
+  const shellPath = resolveRunnableShell()
   const claudeCliPath = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js'
   const claudeCliExists = await fs
     .access(claudeCliPath)
@@ -1461,6 +1494,16 @@ export function registerWorkbenchIpc(): void {
     harmonyChannels.installSkillFromMarketplace,
     async (_event, payload: SkillMarketplaceInstallPayload) => await installSkillFromMarketplace(payload)
   )
+
+  ipcMain.handle(harmonyChannels.getPersistedTerminalLayout, () => getPersistedTerminalLayout())
+  ipcMain.handle(harmonyChannels.savePersistedTerminalLayout, async (_event, layout) =>
+    await savePersistedTerminalLayout(layout)
+  )
+  ipcMain.handle(harmonyChannels.getArchivedTabs, () => getArchivedTabs())
+  ipcMain.handle(harmonyChannels.saveArchivedTabs, async (_event, tabs) =>
+    await saveArchivedTabs(tabs)
+  )
+  ipcMain.handle(harmonyChannels.getPersistentShellSupport, () => getPersistentShellSupport())
 
   ipcMain.handle(harmonyChannels.listSessionStats, (_, payload: SessionStatsRequest) =>
     listSessionStats(payload)

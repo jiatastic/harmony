@@ -1,8 +1,15 @@
 import { resolve } from 'node:path'
-import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import type { CreateTerminalPayload, TerminalSession } from '../shared/workbench'
 import { harmonyChannels } from '../shared/workbench'
-import { createLocalTerminalRuntime } from './terminalRuntime'
+import { createDefaultTerminalBackend } from './terminalBackendFactory'
+import type { TerminalBackend } from './terminalBackend'
+import {
+  ensureTerminalDaemonRunning,
+  listTerminalDaemonSessions,
+  updateTerminalDaemonSessionMetadata
+} from './terminalDaemonManager'
+import type { TerminalDaemonSessionPatch, TerminalDaemonSessionRecord } from '../shared/terminalDaemon'
 
 type TerminalRecord = {
   sessionId: string
@@ -13,6 +20,7 @@ type TerminalRecord = {
 export type TerminalDataDispatch = {
   ownerId: number
   sessionId: string
+  sessionKey?: string
   data: string
 }
 
@@ -29,7 +37,8 @@ export type TerminalInputDispatch = {
   data: string
 }
 
-const terminalRuntime = createLocalTerminalRuntime()
+let terminalRuntime: TerminalBackend | null = null
+let terminalRuntimePromise: Promise<TerminalBackend> | null = null
 const terminalSessions = new Map<string, TerminalRecord>()
 const terminalDataListeners = new Set<(payload: TerminalDataDispatch) => void>()
 const terminalExitListeners = new Set<(payload: TerminalExitDispatch) => void>()
@@ -38,6 +47,27 @@ const terminalInputListeners = new Set<(payload: TerminalInputDispatch) => void>
 function normalizeSessionKey(sessionKey: string | undefined): string | null {
   const value = sessionKey?.trim()
   return value ? value : null
+}
+
+async function getTerminalRuntime(): Promise<TerminalBackend> {
+  if (terminalRuntime) {
+    return terminalRuntime
+  }
+
+  if (!terminalRuntimePromise) {
+    terminalRuntimePromise = ensureTerminalDaemonRunning(app.getPath('userData'))
+      .then((paths) => {
+        const backend = createDefaultTerminalBackend(paths.socketPath)
+        terminalRuntime = backend
+        return backend
+      })
+      .catch((error) => {
+        terminalRuntimePromise = null
+        throw error
+      })
+  }
+
+  return await terminalRuntimePromise
 }
 
 function notifyTerminalData(payload: TerminalDataDispatch): void {
@@ -94,21 +124,23 @@ async function createTerminalSession(
 
   const cwd = resolve(payload.cwd)
   const sessionKey = normalizeSessionKey(payload.sessionKey)
-  const runtimeSession = terminalRuntime.createOrAttach({
+  const runtime = await getTerminalRuntime()
+  const runtimeSession = await runtime.createOrAttach({
     ownerId: event.sender.id,
     payload: {
       ...payload,
       cwd,
       sessionKey: sessionKey ?? undefined
     },
-    onData: ({ sessionId, data }) => {
+    onData: ({ sessionId, sessionKey, data }) => {
       if (!event.sender.isDestroyed()) {
-        event.sender.send(harmonyChannels.terminalData, { sessionId, data })
+        event.sender.send(harmonyChannels.terminalData, { sessionId, sessionKey, data })
       }
 
       notifyTerminalData({
         ownerId: event.sender.id,
         sessionId,
+        sessionKey,
         data
       })
     },
@@ -128,7 +160,7 @@ async function createTerminalSession(
         signal
       })
 
-      const snapshot = terminalRuntime.getSession(sessionId)
+      const snapshot = runtime.getSession(sessionId)
       if (snapshot) {
         sendTerminalState(event, snapshot)
       } else {
@@ -147,11 +179,22 @@ async function createTerminalSession(
   return runtimeSession
 }
 
+async function handleListTerminalSessions(): Promise<TerminalDaemonSessionRecord[]> {
+  return await listTerminalDaemonSessions()
+}
+
+async function handleUpdateTerminalSessionMetadata(
+  _event: IpcMainInvokeEvent,
+  payload: { sessionId: string; patch: TerminalDaemonSessionPatch }
+): Promise<TerminalDaemonSessionRecord> {
+  return await updateTerminalDaemonSessionMetadata(payload.sessionId, payload.patch)
+}
+
 function handleTerminalWrite(
   event: IpcMainEvent,
   payload: { sessionId: string; data: string }
 ): void {
-  writeTerminalInputForOwner(event.sender.id, payload.sessionId, payload.data)
+  void writeTerminalInputForOwner(event.sender.id, payload.sessionId, payload.data)
 }
 
 function handleTerminalResize(
@@ -164,15 +207,19 @@ function handleTerminalResize(
     return
   }
 
-  terminalRuntime.resize(payload.sessionId, payload.cols, payload.rows)
+  void getTerminalRuntime()
+    .then((runtime) => runtime.resize(payload.sessionId, payload.cols, payload.rows))
+    .catch((error) => {
+      console.error('Failed to resize terminal session', error)
+    })
 }
 
 function handleTerminalDetach(event: IpcMainEvent, payload: { sessionId: string }): void {
-  detachTerminalForOwner(event.sender.id, payload.sessionId)
+  void detachTerminalForOwner(event.sender.id, payload.sessionId)
 }
 
 function handleTerminalDestroy(event: IpcMainEvent, payload: { sessionId: string }): void {
-  destroyTerminalForOwner(event.sender.id, payload.sessionId, event)
+  void destroyTerminalForOwner(event.sender.id, payload.sessionId, event)
 }
 
 function handlePersistentTerminalDestroy(
@@ -183,7 +230,11 @@ function handlePersistentTerminalDestroy(
     return
   }
 
-  terminalRuntime.destroyPersistentSession(payload.persistentId)
+  void getTerminalRuntime()
+    .then((runtime) => runtime.destroyPersistentSession(payload.persistentId))
+    .catch((error) => {
+      console.error('Failed to destroy persistent terminal session', error)
+    })
 }
 
 export function onTerminalData(listener: (payload: TerminalDataDispatch) => void): () => void {
@@ -214,52 +265,75 @@ export function writeTerminalInputForOwner(
   ownerId: number,
   sessionId: string,
   data: string
-): boolean {
+): Promise<boolean> {
   const record = getOwnedTerminalRecord(ownerId, sessionId)
 
   if (!record) {
-    return false
+    return Promise.resolve(false)
   }
 
-  const didWrite = terminalRuntime.write(sessionId, data)
-  if (!didWrite) {
-    return false
-  }
+  return getTerminalRuntime()
+    .then((runtime) => runtime.write(sessionId, data))
+    .then((didWrite) => {
+      if (!didWrite) {
+        return false
+      }
 
-  notifyTerminalInput({
-    ownerId,
-    sessionId,
-    data
-  })
-  return true
+      notifyTerminalInput({
+        ownerId,
+        sessionId,
+        data
+      })
+      return true
+    })
+    .catch((error) => {
+      console.error('Failed to write terminal input', error)
+      return false
+    })
 }
 
-export function detachTerminalForOwner(ownerId: number, sessionId: string): void {
+export async function detachTerminalForOwner(ownerId: number, sessionId: string): Promise<void> {
   const record = getOwnedTerminalRecord(ownerId, sessionId)
 
   if (!record) {
     return
   }
 
-  const snapshot = terminalRuntime.detach(sessionId)
+  const runtime = await getTerminalRuntime().catch((error) => {
+    console.error('Failed to detach terminal session', error)
+    return null
+  })
+  if (!runtime) {
+    return
+  }
+
+  const snapshot = await runtime.detach(sessionId)
   if (!snapshot) {
     terminalSessions.delete(sessionId)
   }
 }
 
-export function destroyTerminalForOwner(
+export async function destroyTerminalForOwner(
   ownerId: number,
   sessionId: string,
   event?: IpcMainEvent | IpcMainInvokeEvent
-): void {
+): Promise<void> {
   const record = getOwnedTerminalRecord(ownerId, sessionId)
 
   if (!record) {
     return
   }
 
-  const snapshot = terminalRuntime.getSession(sessionId)
-  terminalRuntime.destroy(sessionId)
+  const runtime = await getTerminalRuntime().catch((error) => {
+    console.error('Failed to destroy terminal session', error)
+    return null
+  })
+  if (!runtime) {
+    return
+  }
+
+  const snapshot = runtime.getSession(sessionId)
+  await runtime.destroy(sessionId)
   terminalSessions.delete(sessionId)
 
   if (event && snapshot) {
@@ -273,6 +347,8 @@ export function destroyTerminalForOwner(
 
 export function registerTerminalIpc(): void {
   ipcMain.handle(harmonyChannels.createTerminal, createTerminalSession)
+  ipcMain.handle(harmonyChannels.listTerminalSessions, handleListTerminalSessions)
+  ipcMain.handle(harmonyChannels.updateTerminalSessionMetadata, handleUpdateTerminalSessionMetadata)
   ipcMain.on(harmonyChannels.writeTerminal, handleTerminalWrite)
   ipcMain.on(harmonyChannels.resizeTerminal, handleTerminalResize)
   ipcMain.on(harmonyChannels.detachTerminal, handleTerminalDetach)
@@ -281,6 +357,8 @@ export function registerTerminalIpc(): void {
 }
 
 export function disposeTerminalSessions(): void {
-  terminalRuntime.dispose()
+  terminalRuntime?.dispose()
+  terminalRuntime = null
+  terminalRuntimePromise = null
   terminalSessions.clear()
 }

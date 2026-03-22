@@ -694,6 +694,45 @@ async function branchExists(branch: string, repositoryRoot: string): Promise<boo
   }
 }
 
+function mapCreateWorktreeError(
+  error: unknown,
+  options: {
+    branch: string
+    worktreePath: string
+    baseRef?: string
+  }
+): Error {
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  const message = rawMessage.trim()
+
+  if (/already checked out at/i.test(message)) {
+    return new Error(`"${options.branch}" is already open in another worktree.`)
+  }
+
+  if (
+    /already exists and is not an empty directory/i.test(message) ||
+    /destination path .* already exists/i.test(message) ||
+    /could not create leading directories/i.test(message) ||
+    /file exists/i.test(message)
+  ) {
+    return new Error(
+      `The folder "${basename(options.worktreePath)}" already exists. Remove it or choose a different worktree location.`
+    )
+  }
+
+  if (
+    options.baseRef &&
+    (/not a valid object name/i.test(message) ||
+      /unknown revision/i.test(message) ||
+      /not a commit/i.test(message) ||
+      /invalid reference/i.test(message))
+  ) {
+    return new Error(`"${options.baseRef}" is not available locally yet. Fetch it first, then try again.`)
+  }
+
+  return new Error(`Couldn't create a worktree for "${options.branch}".`)
+}
+
 async function createWorktree(payload: WorktreeCreatePayload): Promise<WorktreeSummary> {
   const repositoryRoot = payload.workspacePath
     ? await getRepositoryRootFromPath(payload.workspacePath)
@@ -716,7 +755,15 @@ async function createWorktree(payload: WorktreeCreatePayload): Promise<WorktreeS
       ? ['worktree', 'add', '--track', '-b', branch, resolve(worktreePath), baseRef]
       : ['worktree', 'add', '-b', branch, resolve(worktreePath)]
 
-  await runGit(args, repositoryRoot)
+  try {
+    await runGit(args, repositoryRoot)
+  } catch (error) {
+    throw mapCreateWorktreeError(error, {
+      branch,
+      worktreePath: resolve(worktreePath),
+      baseRef
+    })
+  }
 
   const worktrees = await parseWorktreeListFromRepo(repositoryRoot)
   const createdWorktree = worktrees.find((worktree) => worktree.path === resolve(worktreePath))

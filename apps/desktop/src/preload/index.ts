@@ -3,9 +3,11 @@ import { electronAPI } from '@electron-toolkit/preload'
 import type {
   AppUpdateState,
   AgentRun,
+  AgentRestorePayload,
   AgentStartPayload,
   CreateTerminalPayload,
   HarmonyApi,
+  PersistentShellSupport,
   ReadFilePayload,
   SaveFilePayload,
   TerminalDataEvent,
@@ -16,6 +18,7 @@ import type {
   WorktreeRemovePayload
 } from '../shared/workbench'
 import { harmonyChannels } from '../shared/workbench'
+import type { TerminalDaemonSessionPatch } from '../shared/terminalDaemon'
 
 function subscribeToChannel<T>(channel: string, listener: (payload: T) => void): () => void {
   const subscription = (_event: Electron.IpcRendererEvent, payload: T): void => {
@@ -72,6 +75,20 @@ const api: HarmonyApi = {
     ipcRenderer.invoke(harmonyChannels.installSkillFromMarketplace, payload),
   createTerminal: (payload: CreateTerminalPayload) =>
     ipcRenderer.invoke(harmonyChannels.createTerminal, payload),
+  listTerminalSessions: () =>
+    ipcRenderer.invoke(harmonyChannels.listTerminalSessions),
+  updateTerminalSessionMetadata: (sessionId: string, patch: TerminalDaemonSessionPatch) =>
+    ipcRenderer.invoke(harmonyChannels.updateTerminalSessionMetadata, { sessionId, patch }),
+  getPersistentShellSupport: () =>
+    ipcRenderer.invoke(harmonyChannels.getPersistentShellSupport) as Promise<PersistentShellSupport>,
+  getPersistedTerminalLayout: () =>
+    ipcRenderer.invoke(harmonyChannels.getPersistedTerminalLayout),
+  savePersistedTerminalLayout: (layout) =>
+    ipcRenderer.invoke(harmonyChannels.savePersistedTerminalLayout, layout),
+  getArchivedTabs: () =>
+    ipcRenderer.invoke(harmonyChannels.getArchivedTabs),
+  saveArchivedTabs: (tabs) =>
+    ipcRenderer.invoke(harmonyChannels.saveArchivedTabs, tabs),
   detachTerminal: (sessionId: string) =>
     ipcRenderer.send(harmonyChannels.detachTerminal, { sessionId }),
   destroyTerminal: (sessionId: string) =>
@@ -100,6 +117,8 @@ const api: HarmonyApi = {
     ipcRenderer.send(harmonyChannels.resizeTerminal, { sessionId, cols, rows }),
   startAgent: (payload: AgentStartPayload) =>
     ipcRenderer.invoke(harmonyChannels.startAgent, payload),
+  restoreAgent: (payload: AgentRestorePayload) =>
+    ipcRenderer.invoke(harmonyChannels.restoreAgent, payload),
   writeFile: (payload: SaveFilePayload) => ipcRenderer.invoke(harmonyChannels.writeFile, payload),
   writeTerminal: (sessionId: string, data: string) =>
     ipcRenderer.send(harmonyChannels.writeTerminal, { sessionId, data }),

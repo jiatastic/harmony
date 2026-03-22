@@ -1043,25 +1043,6 @@ button {
   white-space: nowrap;
 }
 
-.wt-main-badge {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--foreground) 6%, transparent);
-  color: var(--muted-foreground);
-  border: 1px solid color-mix(in oklab, var(--sidebar-border) 72%, transparent);
-  flex-shrink: 0;
-}
-
-.dark .wt-main-badge {
-  background: color-mix(in oklab, white 6%, transparent);
-  color: var(--sidebar-foreground);
-  border-color: color-mix(in oklab, white 10%, transparent);
-}
-
 .wt-remove-btn {
   display: inline-flex;
   align-items: center;
@@ -1166,9 +1147,12 @@ button {
 }
 
 .wt-open-terminal-status--idle,
-.wt-open-terminal-status--done,
 .wt-open-terminal-status--shell {
   color: var(--muted-foreground);
+}
+
+.wt-open-terminal-status--done {
+  color: oklch(0.7238 0.1766 154.449);
 }
 
 .wt-open-terminal-status--waiting {
@@ -1319,6 +1303,26 @@ button {
   position: relative;
   background: linear-gradient(180deg, var(--terminal-surface) 0%, var(--terminal-canvas) 100%);
   color: var(--terminal-foreground);
+}
+
+.terminal-support-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--terminal-border);
+  background: color-mix(in oklab, var(--terminal-surface) 80%, rgb(245 158 11 / 0.12));
+  color: var(--terminal-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.terminal-support-banner code {
+  padding: 2px 6px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--terminal-canvas) 85%, transparent);
+  font-size: 11px;
 }
 
 /* ── Terminal tabs ─────────────────────────────────── */
@@ -1575,6 +1579,353 @@ button {
 .terminal-tab-add:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.terminal-tab-archive-toggle {
+  min-width: 124px;
+  gap: 8px;
+  padding-inline: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.terminal-tab-archive-toggle.is-active {
+  color: var(--terminal-foreground);
+  background: color-mix(in oklab, var(--terminal-raised) 82%, var(--terminal-surface));
+  border-color: var(--terminal-border-strong);
+  box-shadow: inset 0 -2px 0 color-mix(in oklab, var(--terminal-accent) 42%, transparent);
+}
+
+.terminal-tab-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  color: var(--terminal-muted);
+  transform: rotate(-90deg);
+  transition:
+    transform 180ms cubic-bezier(0.23, 1, 0.32, 1),
+    color 160ms ease;
+}
+
+.terminal-tab-archive-toggle:hover .terminal-tab-chevron,
+.terminal-tab-archive-toggle.is-active .terminal-tab-chevron {
+  color: var(--terminal-foreground);
+}
+
+.terminal-tab-chevron.is-open {
+  transform: rotate(0deg);
+}
+
+.terminal-tab-archive-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1;
+}
+
+.terminal-tab-archive-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: inherit;
+}
+
+.terminal-tab-archive-state {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--terminal-muted);
+}
+
+.terminal-tab-archive-toggle:hover .terminal-tab-archive-state,
+.terminal-tab-archive-toggle.is-active .terminal-tab-archive-state {
+  color: color-mix(in oklab, var(--terminal-foreground) 78%, var(--terminal-muted));
+}
+
+.terminal-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--terminal-accent-soft) 84%, var(--terminal-raised));
+  color: var(--terminal-foreground);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.terminal-archive-panel {
+  max-height: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  opacity: 0;
+  border-bottom: 1px solid transparent;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.03), transparent 42%),
+    color-mix(in oklab, var(--terminal-surface) 94%, var(--terminal-canvas));
+  transition:
+    max-height 220ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 160ms ease,
+    padding-top 160ms ease,
+    padding-bottom 160ms ease,
+    border-color 160ms ease;
+}
+
+.terminal-archive-panel.is-open {
+  max-height: 420px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  opacity: 1;
+  border-bottom-color: var(--terminal-border);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03);
+}
+
+.terminal-archive-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.terminal-archive-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.terminal-archive-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--terminal-foreground);
+}
+
+.terminal-archive-copy {
+  max-width: 78ch;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--terminal-muted);
+}
+
+.terminal-archive-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.terminal-archive-scope {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--terminal-surface) 88%, var(--terminal-canvas));
+  color: var(--terminal-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.terminal-archive-scope:hover {
+  color: var(--terminal-foreground);
+  background: color-mix(in oklab, var(--terminal-raised) 82%, var(--terminal-surface));
+  border-color: var(--terminal-border-strong);
+}
+
+.terminal-archive-scope:active {
+  transform: scale(0.97);
+}
+
+.terminal-archive-scope.is-active {
+  color: var(--terminal-foreground);
+  border-color: color-mix(in oklab, var(--terminal-accent) 60%, var(--terminal-border));
+  background: color-mix(in oklab, var(--terminal-accent-soft) 82%, var(--terminal-raised));
+}
+
+.terminal-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.terminal-archive-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.03), transparent 42%),
+    color-mix(in oklab, var(--terminal-surface) 92%, var(--terminal-canvas));
+  box-shadow: 0 8px 16px rgb(24 24 27 / 0.04);
+}
+
+.terminal-archive-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.terminal-archive-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-archive-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.terminal-archive-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--terminal-foreground);
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-archive-card-meta {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.terminal-archive-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--terminal-raised) 82%, var(--terminal-surface));
+  color: var(--terminal-muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.terminal-archive-chip.is-status-running {
+  color: #60a5fa;
+}
+
+.terminal-archive-chip.is-status-waiting {
+  color: #fbbf24;
+}
+
+.terminal-archive-chip.is-status-done {
+  color: #4ade80;
+}
+
+.terminal-archive-chip.is-status-error {
+  color: #f87171;
+}
+
+.terminal-archive-time {
+  font-size: 10px;
+  color: var(--terminal-muted);
+}
+
+.terminal-archive-card-copy {
+  max-width: 42ch;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--terminal-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-archive-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.terminal-archive-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 68px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--terminal-surface) 86%, var(--terminal-canvas));
+  color: var(--terminal-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.terminal-archive-action:hover {
+  color: var(--terminal-foreground);
+  background: color-mix(in oklab, var(--terminal-raised) 84%, var(--terminal-surface));
+  border-color: var(--terminal-border-strong);
+}
+
+.terminal-archive-action:active {
+  transform: scale(0.97);
+}
+
+.terminal-archive-action.is-primary {
+  color: var(--terminal-foreground);
+  border-color: color-mix(in oklab, var(--terminal-accent) 62%, var(--terminal-border));
+  background: color-mix(in oklab, var(--terminal-accent-soft) 84%, var(--terminal-raised));
+}
+
+.terminal-archive-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 84px;
+  padding: 18px;
+  border: 1px dashed var(--terminal-border);
+  border-radius: 18px;
+  color: var(--terminal-muted);
+  font-size: 12px;
+  text-align: center;
+  background: color-mix(in oklab, var(--terminal-surface) 86%, var(--terminal-canvas));
 }
 
 .agent-launchers {
@@ -2778,9 +3129,7 @@ button {
   justify-content: center;
   padding: 24px;
   color: var(--terminal-foreground);
-  background:
-    radial-gradient(circle at top, rgb(88 196 255 / 0.08), transparent 42%),
-    linear-gradient(180deg, var(--terminal-raised) 0%, var(--terminal-canvas) 100%);
+  background: var(--terminal-canvas);
 }
 
 .terminal-empty p {
@@ -3711,107 +4060,6 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* ── Session stat rows (Context Window accordion) ── */
-
-.accord-item-session {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 3px;
-  padding: 6px 12px;
-}
-
-.session-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.session-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.session-tokens {
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--foreground);
-  flex-shrink: 0;
-}
-
-.session-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.session-model {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  font-family: 'JetBrains Mono', 'SF Mono', monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 90px;
-}
-
-.session-breakdown {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.session-ctx-max {
-  font-size: 12px;
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
-/* Context window bar */
-.session-bar-wrap {
-  height: 3px;
-  border-radius: 999px;
-  background: var(--muted);
-  overflow: hidden;
-  margin: 2px 0;
-}
-
-.session-bar {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 300ms ease;
-  background: oklch(0.723 0.191 142.5);
-}
-
-.session-bar.is-warn {
-  background: oklch(0.796 0.1723 86);
-}
-
-.session-bar.is-danger {
-  background: oklch(0.6368 0.2078 25.3313);
-}
-
-/* Agent source badge */
-.session-agent {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted-foreground);
-  opacity: 0.6;
-  flex-shrink: 0;
 }
 
 /* ── Stats row ─────────────────────────────────────── */

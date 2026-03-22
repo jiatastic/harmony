@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { disposeWorkbench, registerWorkbenchIpc } from './workbench'
+import { ensureTerminalDaemonRunning } from './terminalDaemonManager'
 import { initializeUpdater, registerUpdaterIpc } from './updater'
 
 function createWindow(): void {
@@ -114,11 +115,15 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  void ensureTerminalDaemonRunning(app.getPath('userData')).catch((error) => {
+    console.error('Failed to start terminal daemon scaffold', error)
+  })
+
   registerWorkbenchIpc()
   registerUpdaterIpc()
 
   createWindow()
-  initializeUpdater()
+  void initializeUpdater()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -131,11 +136,13 @@ app.whenReady().then(() => {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
-  disposeWorkbench()
-
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('will-quit', () => {
+  disposeWorkbench()
 })
 
 // In this file you can include the rest of your app's specific main process

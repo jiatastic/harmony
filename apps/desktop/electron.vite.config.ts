@@ -3,7 +3,16 @@ import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          daemon: resolve('src/daemon/index.ts')
+        }
+      }
+    }
+  },
   preload: {},
   renderer: {
     resolve: {

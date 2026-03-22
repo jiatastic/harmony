@@ -3,7 +3,17 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import type { AgentRun, AvailableAgent, TerminalLifecycleState, TerminalSession } from '../../../shared/workbench'
+import type {
+  AgentRun,
+  ArchivedPanelTab,
+  AvailableAgent,
+  PersistedPanelTab,
+  PersistentShellSupport,
+  PersistedTerminalLayout,
+  TerminalLifecycleState,
+  TerminalSession
+} from '../../../shared/workbench'
+import type { TerminalDaemonSessionRecord } from '../../../shared/terminalDaemon'
 
 const cursorIconUrl = new URL('../assets/agents/cursor.png', import.meta.url).href
 const codexIconUrl = new URL('../assets/agents/codex.png', import.meta.url).href
@@ -23,6 +33,7 @@ export interface OpenTerminalTabSummary {
   workspacePath: string
   title: string
   status?: AgentRun['status']
+  message?: string
   isAgent?: boolean
   agentId?: string
   sessionId?: string
@@ -44,6 +55,7 @@ type StoredTerminalTab = {
   title: string
   customTitle?: boolean
   agent?: AvailableAgent
+  agentRun?: AgentRun
   agentViewMode?: AgentViewMode
   lastKnownStatus?: AgentRun['status']
 }
@@ -75,6 +87,11 @@ type TerminalTab = {
   agentViewMode: AgentViewMode
   chatMessages: AgentChatMessage[]
   lastKnownStatus?: AgentRun['status']
+  restoreState?: 'disconnected' | 'failed' | 'exited'
+  autoStart?: boolean
+  restoredSnapshot?: string
+  launchCommand?: string
+  resumeAgent?: boolean
 }
 
 type BrowserTab = {
@@ -88,6 +105,14 @@ type BrowserTab = {
 }
 
 type PanelTab = TerminalTab | BrowserTab
+type ArchivedTerminalTab = StoredTerminalTab & {
+  archivedAt: string
+  archivedSessionId?: string
+}
+type ArchivedBrowserTab = StoredBrowserTab & {
+  archivedAt: string
+}
+type ArchivedTab = ArchivedTerminalTab | ArchivedBrowserTab
 type TerminalVisualStatus = AgentRun['status'] | 'exited' | 'destroyed'
 type ThemeExtras = ITheme & {
   selectionInactiveBackground?: string
@@ -97,112 +122,420 @@ type ThemeExtras = ITheme & {
   overviewRulerBorder?: string
 }
 
-const TERMINAL_LAYOUT_KEY = 'harmony-terminal-layout-v1'
+const LEGACY_TERMINAL_LAYOUT_KEY = 'harmony-terminal-layout-v1'
 
-function loadTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, string | null> } {
+function isStoredAgentRun(value: unknown): value is AgentRun {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<AgentRun>
+  return (
+    typeof candidate.runId === 'string' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.workspacePath === 'string' &&
+    typeof candidate.command === 'string' &&
+    typeof candidate.displayName === 'string' &&
+    typeof candidate.status === 'string' &&
+    typeof candidate.startedAt === 'string'
+  )
+}
+
+function deserializePersistedLayout(layout: PersistedTerminalLayout): {
+  tabs: PanelTab[]
+  activeTabIds: Record<string, string | null>
+} {
+  const tabs: PanelTab[] = []
+  for (const tab of layout.tabs) {
+    if (
+      !tab ||
+      typeof tab.id !== 'string' ||
+      typeof tab.workspacePath !== 'string' ||
+      typeof tab.title !== 'string'
+    ) {
+      continue
+    }
+
+    if (tab.type === 'terminal') {
+      tabs.push({
+        id: tab.id,
+        type: 'terminal',
+        workspacePath: tab.workspacePath,
+        title: sanitizeStoredTerminalTitle(tab.title, tab.workspacePath),
+        customTitle: tab.customTitle === true,
+        agent: tab.agent,
+        agentRun: isStoredAgentRun(tab.agentRun) ? tab.agentRun : undefined,
+        agentViewMode: tab.agent ? (tab.agentViewMode ?? 'terminal') : 'terminal',
+        chatMessages: [],
+        lastKnownStatus: tab.lastKnownStatus
+      })
+      continue
+    }
+
+    if (tab.type === 'browser' && typeof tab.url === 'string' && typeof tab.draftUrl === 'string') {
+      tabs.push({
+        id: tab.id,
+        type: 'browser',
+        workspacePath: tab.workspacePath,
+        title: tab.title,
+        url: tab.url,
+        draftUrl: tab.draftUrl,
+        customTitle: tab.customTitle === true
+      })
+    }
+  }
+
+  const activeTabIds =
+    layout.activeTabIds && typeof layout.activeTabIds === 'object'
+      ? Object.fromEntries(
+          Object.entries(layout.activeTabIds).filter(
+            ([key, value]) => typeof key === 'string' && (typeof value === 'string' || value === null)
+          )
+        )
+      : {}
+
+  return { tabs, activeTabIds }
+}
+
+function deserializeArchivedTabs(tabs: ArchivedPanelTab[]): ArchivedTab[] {
+  const archivedTabs: ArchivedTab[] = []
+  for (const tab of tabs) {
+    if (
+      !tab ||
+      typeof tab.id !== 'string' ||
+      typeof tab.workspacePath !== 'string' ||
+      typeof tab.title !== 'string' ||
+      typeof tab.archivedAt !== 'string'
+    ) {
+      continue
+    }
+
+    if (tab.type === 'terminal') {
+      archivedTabs.push({
+        id: tab.id,
+        type: 'terminal',
+        workspacePath: tab.workspacePath,
+        title: sanitizeStoredTerminalTitle(tab.title, tab.workspacePath),
+        customTitle: tab.customTitle === true,
+        agent: tab.agent,
+        agentRun: isStoredAgentRun(tab.agentRun) ? tab.agentRun : undefined,
+        agentViewMode: tab.agent ? (tab.agentViewMode ?? 'terminal') : 'terminal',
+        lastKnownStatus: tab.lastKnownStatus,
+        archivedAt: tab.archivedAt,
+        archivedSessionId: tab.archivedSessionId
+      })
+      continue
+    }
+
+    if (tab.type === 'browser' && typeof tab.url === 'string' && typeof tab.draftUrl === 'string') {
+      archivedTabs.push({
+        id: tab.id,
+        type: 'browser',
+        workspacePath: tab.workspacePath,
+        title: tab.title,
+        url: tab.url,
+        draftUrl: tab.draftUrl,
+        customTitle: tab.customTitle === true,
+        archivedAt: tab.archivedAt
+      })
+    }
+  }
+
+  return archivedTabs.sort((left, right) => right.archivedAt.localeCompare(left.archivedAt))
+}
+
+function inferAgentIdFromCommand(command: string | undefined): string | undefined {
+  const normalized = command?.trim().toLowerCase()
+  if (!normalized) {
+    return undefined
+  }
+
+  if (normalized.startsWith('agent')) return 'cursor'
+  if (normalized.startsWith('codex')) return 'codex'
+  if (normalized.startsWith('opencode')) return 'opencode'
+  if (normalized.startsWith('claude')) return 'claude'
+  if (normalized.startsWith('gemini')) return 'gemini'
+  return undefined
+}
+
+function inferAgentFromSession(record: TerminalDaemonSessionRecord): AvailableAgent | undefined {
+  const agentId = record.agentId ?? inferAgentIdFromCommand(record.command)
+  switch (agentId) {
+    case 'cursor':
+      return { id: 'cursor', name: 'Cursor CLI', command: 'agent', binaryPath: '' }
+    case 'codex':
+      return { id: 'codex', name: 'Codex', command: 'codex', binaryPath: '' }
+    case 'opencode':
+      return { id: 'opencode', name: 'OpenCode', command: 'opencode', binaryPath: '' }
+    case 'claude':
+      return { id: 'claude', name: 'Claude Code', command: 'claude', binaryPath: '' }
+    case 'gemini':
+      return { id: 'gemini', name: 'Gemini CLI', command: 'gemini', binaryPath: '' }
+    default:
+      return undefined
+  }
+}
+
+function stableDaemonSessionId(record: TerminalDaemonSessionRecord): string {
+  return record.sessionKey ?? record.persistentId ?? record.sessionId
+}
+
+function daemonSessionStatusPriority(status: TerminalDaemonSessionRecord['status']): number {
+  switch (status) {
+    case 'working':
+      return 7
+    case 'waiting':
+      return 6
+    case 'ready':
+      return 5
+    case 'restoring':
+      return 4
+    case 'disconnected':
+      return 3
+    case 'completed':
+    case 'exited':
+      return 2
+    case 'failed':
+      return 1
+  }
+}
+
+function dedupeDaemonSessions(
+  daemonSessions: TerminalDaemonSessionRecord[]
+): TerminalDaemonSessionRecord[] {
+  const deduped = new Map<string, TerminalDaemonSessionRecord>()
+
+  for (const session of daemonSessions) {
+    const stableId = stableDaemonSessionId(session)
+    const existing = deduped.get(stableId)
+    if (!existing) {
+      deduped.set(stableId, session)
+      continue
+    }
+
+    const priorityDiff =
+      daemonSessionStatusPriority(session.status) - daemonSessionStatusPriority(existing.status)
+    if (priorityDiff > 0) {
+      deduped.set(stableId, session)
+      continue
+    }
+
+    if (priorityDiff === 0 && existing.updatedAt < session.updatedAt) {
+      deduped.set(stableId, session)
+    }
+  }
+
+  return Array.from(deduped.values())
+}
+
+function shouldRestoreDaemonSession(record: TerminalDaemonSessionRecord): boolean {
+  switch (record.status) {
+    case 'ready':
+    case 'working':
+    case 'waiting':
+    case 'restoring':
+      return true
+    case 'disconnected':
+      return record.kind === 'shell' && Boolean(record.persistentId)
+    case 'failed':
+    case 'exited':
+    case 'completed':
+      return false
+  }
+}
+
+function sanitizeActiveTabIds(
+  tabs: PanelTab[],
+  activeTabIds: Record<string, string | null>
+): Record<string, string | null> {
+  const tabIds = new Set(tabs.map((tab) => tab.id))
+  const firstTabByWorkspace = new Map<string, string>()
+
+  for (const tab of tabs) {
+    if (!firstTabByWorkspace.has(tab.workspacePath)) {
+      firstTabByWorkspace.set(tab.workspacePath, tab.id)
+    }
+  }
+
+  const nextActiveTabIds: Record<string, string | null> = {}
+  const workspacePaths = new Set([
+    ...Object.keys(activeTabIds),
+    ...tabs.map((tab) => tab.workspacePath)
+  ])
+
+  for (const workspacePath of workspacePaths) {
+    const currentActiveId = activeTabIds[workspacePath]
+    if (currentActiveId && tabIds.has(currentActiveId)) {
+      nextActiveTabIds[workspacePath] = currentActiveId
+      continue
+    }
+
+    nextActiveTabIds[workspacePath] = firstTabByWorkspace.get(workspacePath) ?? null
+  }
+
+  return nextActiveTabIds
+}
+
+function mergeLayoutWithDaemonSessions(
+  persistedLayout: { tabs: PanelTab[]; activeTabIds: Record<string, string | null> },
+  daemonSessions: TerminalDaemonSessionRecord[],
+  archivedTabIds: Set<string>
+): { tabs: PanelTab[]; activeTabIds: Record<string, string | null> } {
+  const browserTabs = persistedLayout.tabs.filter((tab): tab is BrowserTab => tab.type === 'browser')
+  const persistedTerminalTabs = new Map(
+    persistedLayout.tabs
+      .filter((tab): tab is TerminalTab => tab.type === 'terminal')
+      .map((tab) => [tab.id, tab])
+  )
+
+  const mergedSessions = dedupeDaemonSessions(daemonSessions).filter(
+    (record) => shouldRestoreDaemonSession(record) && !archivedTabIds.has(stableDaemonSessionId(record))
+  )
+
+  if (mergedSessions.length === 0) {
+    return {
+      tabs: browserTabs,
+      activeTabIds: sanitizeActiveTabIds(browserTabs, persistedLayout.activeTabIds)
+    }
+  }
+
+  const daemonTerminalTabs: TerminalTab[] = mergedSessions.map((record) => {
+    const stableId = stableDaemonSessionId(record)
+    const persisted = persistedTerminalTabs.get(stableId)
+    const agent = inferAgentFromSession(record) ?? persisted?.agent
+    const autoStart =
+      record.kind === 'shell' && Boolean(record.persistentId)
+        ? record.status === 'ready' ||
+          record.status === 'working' ||
+          record.status === 'waiting' ||
+          record.status === 'restoring' ||
+          record.status === 'disconnected'
+        : record.status === 'ready' ||
+          record.status === 'working' ||
+          record.status === 'waiting' ||
+          record.status === 'restoring'
+    const restoreState =
+      !autoStart && (record.status === 'disconnected' || record.status === 'failed' || record.status === 'exited')
+        ? record.status
+        : undefined
+
+    return {
+      id: stableId,
+      type: 'terminal',
+      workspacePath: record.workspacePath || record.cwd,
+      title: (
+        persisted?.title ??
+        record.agentRun?.suggestedTitle ??
+        record.title ??
+        leaf(record.workspacePath || record.cwd)
+      ),
+      customTitle: persisted?.customTitle ?? Boolean(record.title),
+      sessionId: autoStart && record.status !== 'disconnected' ? record.sessionId : undefined,
+      runtimeState: record.status === 'exited' ? 'exited' : restoreState ? 'destroyed' : undefined,
+      lastExitCode: record.lastKnownExitCode,
+      agent,
+      agentRun: record.agentRun ?? persisted?.agentRun,
+      agentViewMode: persisted?.agentViewMode ?? 'terminal',
+      chatMessages: [],
+      lastKnownStatus: record.agentRun?.status ?? persisted?.lastKnownStatus,
+      restoreState,
+      autoStart,
+      restoredSnapshot: record.recentOutput
+    }
+  })
+
+  return {
+    tabs: [...browserTabs, ...daemonTerminalTabs],
+    activeTabIds: sanitizeActiveTabIds(
+      [...browserTabs, ...daemonTerminalTabs],
+      persistedLayout.activeTabIds
+    )
+  }
+}
+
+function loadLegacyTerminalLayout(): { tabs: PanelTab[]; activeTabIds: Record<string, string | null> } {
   try {
-    const raw = localStorage.getItem(TERMINAL_LAYOUT_KEY)
+    const raw = localStorage.getItem(LEGACY_TERMINAL_LAYOUT_KEY)
     if (!raw) {
       return { tabs: [], activeTabIds: {} }
     }
 
-    const parsed = JSON.parse(raw) as {
+    const parsed = JSON.parse(raw) as PersistedTerminalLayout & {
       tabs?: StoredPanelTab[]
       activeTabIds?: Record<string, string | null>
     }
-
-    const tabs: PanelTab[] = []
-    if (Array.isArray(parsed.tabs)) {
-      for (const tab of parsed.tabs) {
-        if (
-          !tab ||
-          typeof tab.id !== 'string' ||
-          typeof tab.workspacePath !== 'string' ||
-          typeof tab.title !== 'string'
-        ) {
-          continue
-        }
-
-        if (tab.type === 'terminal') {
-          tabs.push({
-            id: tab.id,
-            type: 'terminal',
-            workspacePath: tab.workspacePath,
-            title: sanitizeStoredTerminalTitle(tab.title, tab.workspacePath),
-            customTitle: tab.customTitle === true,
-            agent: tab.agent,
-            agentViewMode: tab.agent ? (tab.agentViewMode ?? 'terminal') : 'terminal',
-            chatMessages: [],
-            lastKnownStatus: tab.lastKnownStatus
-          })
-          continue
-        }
-
-        if (
-          tab.type === 'browser' &&
-          typeof tab.url === 'string' &&
-          typeof tab.draftUrl === 'string'
-        ) {
-          tabs.push({
-            id: tab.id,
-            type: 'browser',
-            workspacePath: tab.workspacePath,
-            title: tab.title,
-            url: tab.url,
-            draftUrl: tab.draftUrl,
-            customTitle: tab.customTitle === true
-          })
-        }
-      }
-    }
-
-    const activeTabIds =
-      parsed.activeTabIds && typeof parsed.activeTabIds === 'object'
-        ? Object.fromEntries(
-            Object.entries(parsed.activeTabIds).filter(
-              ([key, value]) => typeof key === 'string' && (typeof value === 'string' || value === null)
-            )
-          )
-        : {}
-
-    return { tabs, activeTabIds }
+    return deserializePersistedLayout(parsed)
   } catch {
     return { tabs: [], activeTabIds: {} }
   }
 }
 
-function saveTerminalLayout(tabs: PanelTab[], activeTabIds: Record<string, string | null>): void {
-  try {
-    const serializableTabs: StoredPanelTab[] = tabs.map((tab) =>
-      tab.type === 'terminal'
-        ? {
-            id: tab.id,
-            type: 'terminal',
-            workspacePath: tab.workspacePath,
-            title: tab.title,
-            customTitle: tab.customTitle === true,
-            agent: tab.agent,
-            agentViewMode: tab.agent ? tab.agentViewMode : undefined,
-            lastKnownStatus: tab.lastKnownStatus
-          }
-        : {
-            id: tab.id,
-            type: 'browser',
-            workspacePath: tab.workspacePath,
-            title: tab.title,
-            url: tab.url,
-            draftUrl: tab.draftUrl,
-            customTitle: tab.customTitle === true
-          }
-    )
+function serializePersistedLayout(
+  tabs: PanelTab[],
+  activeTabIds: Record<string, string | null>
+): PersistedTerminalLayout {
+  const serializableTabs: PersistedPanelTab[] = tabs.map((tab) =>
+    tab.type === 'terminal'
+      ? {
+          id: tab.id,
+          type: 'terminal',
+          workspacePath: tab.workspacePath,
+          title: tab.title,
+          customTitle: tab.customTitle === true,
+          agent: tab.agent,
+          agentRun: tab.agentRun,
+          agentViewMode: tab.agent ? tab.agentViewMode : undefined,
+          lastKnownStatus: tab.lastKnownStatus
+        }
+      : {
+          id: tab.id,
+          type: 'browser',
+          workspacePath: tab.workspacePath,
+          title: tab.title,
+          url: tab.url,
+          draftUrl: tab.draftUrl,
+          customTitle: tab.customTitle === true
+        }
+  )
 
-    localStorage.setItem(
-      TERMINAL_LAYOUT_KEY,
-      JSON.stringify({
-        tabs: serializableTabs,
-        activeTabIds
-      })
-    )
+  return {
+    tabs: serializableTabs,
+    activeTabIds
+  }
+}
+
+function serializeArchivedTabs(tabs: ArchivedTab[]): ArchivedPanelTab[] {
+  return tabs.map((tab) =>
+    tab.type === 'terminal'
+      ? {
+          id: tab.id,
+          type: 'terminal',
+          workspacePath: tab.workspacePath,
+          title: tab.title,
+          customTitle: tab.customTitle === true,
+          agent: tab.agent,
+          agentRun: tab.agentRun,
+          agentViewMode: tab.agent ? tab.agentViewMode : undefined,
+          lastKnownStatus: tab.lastKnownStatus,
+          archivedAt: tab.archivedAt,
+          archivedSessionId: tab.archivedSessionId
+        }
+      : {
+          id: tab.id,
+          type: 'browser',
+          workspacePath: tab.workspacePath,
+          title: tab.title,
+          url: tab.url,
+          draftUrl: tab.draftUrl,
+          customTitle: tab.customTitle === true,
+          archivedAt: tab.archivedAt
+        }
+  )
+}
+
+function clearLegacyTerminalLayout(): void {
+  try {
+    localStorage.removeItem(LEGACY_TERMINAL_LAYOUT_KEY)
   } catch {
     /* ignore */
   }
@@ -291,6 +624,7 @@ function terminalTheme(): ITheme {
 }
 
 const OSC_TERMINATOR = '\u001b\\'
+const SHIFT_ENTER_SEQUENCE = '\u001b[13;2u'
 
 function parseCssColorToRgb(value: string): [number, number, number] | null {
   const normalized = value.trim()
@@ -429,6 +763,64 @@ function truncateTitle(value: string, max = 36): string {
   return `${compact.slice(0, max - 1)}…`
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function relativeTimeFromNow(iso: string): string {
+  const deltaMs = Date.now() - new Date(iso).getTime()
+  if (!Number.isFinite(deltaMs)) {
+    return 'just now'
+  }
+
+  const absSeconds = Math.max(1, Math.round(Math.abs(deltaMs) / 1000))
+  if (absSeconds < 60) {
+    return deltaMs >= 0 ? 'just now' : 'in a moment'
+  }
+
+  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+    ['minute', 60],
+    ['hour', 60 * 60],
+    ['day', 60 * 60 * 24],
+    ['week', 60 * 60 * 24 * 7]
+  ]
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    const [unit, secondsPerUnit] = units[index]
+    if (absSeconds >= secondsPerUnit || unit === 'minute') {
+      const value = Math.round(deltaMs / 1000 / secondsPerUnit)
+      return formatter.format(-value, unit)
+    }
+  }
+
+  return 'just now'
+}
+
+function buildAgentResumeCommand(agent: AvailableAgent, agentRun?: AgentRun): string {
+  const externalSessionId = agentRun?.externalSessionId?.trim()
+  switch (agent.id) {
+    case 'cursor':
+      return externalSessionId
+        ? `${agent.command} --resume=${shellQuote(externalSessionId)}`
+        : `${agent.command} --continue`
+    case 'claude':
+      return externalSessionId ? `${agent.command} -r ${shellQuote(externalSessionId)}` : `${agent.command} -c`
+    case 'gemini':
+      return externalSessionId ? `${agent.command} -r ${shellQuote(externalSessionId)}` : `${agent.command} -r latest`
+    case 'opencode':
+      return externalSessionId
+        ? `${agent.command} --session ${shellQuote(externalSessionId)}`
+        : `${agent.command} --continue`
+    case 'codex':
+      return externalSessionId
+        ? `${agent.command} resume ${shellQuote(externalSessionId)}`
+        : `${agent.command} resume --last`
+    default:
+      return agent.command
+  }
+}
+
 function hasTerminalControlArtifacts(value: string): boolean {
   const compact = value.replace(/\s+/g, ' ').trim()
   if (!compact) {
@@ -553,6 +945,36 @@ function shouldCaptureSystemChunk(value: string): boolean {
   return ['error', 'failed', 'exit', 'denied', 'timed out', 'warning'].some((needle) => normalized.includes(needle))
 }
 
+function makeDisplayTitleMap(tabs: PanelTab[]): Map<string, string> {
+  const duplicates = new Map<string, number>()
+  const displayTitles = new Map<string, string>()
+
+  for (const tab of tabs) {
+    const key = `${tab.workspacePath}::${tab.title}`
+    duplicates.set(key, (duplicates.get(key) ?? 0) + 1)
+  }
+
+  const seen = new Map<string, number>()
+  for (const tab of tabs) {
+    const key = `${tab.workspacePath}::${tab.title}`
+    const count = duplicates.get(key) ?? 0
+    if (count <= 1) {
+      displayTitles.set(tab.id, tab.title)
+      continue
+    }
+
+    const nextIndex = (seen.get(key) ?? 0) + 1
+    seen.set(key, nextIndex)
+    displayTitles.set(tab.id, `${tab.title} · ${nextIndex}`)
+  }
+
+  return displayTitles
+}
+
+function canMeasureTerminalHost(host: HTMLDivElement): boolean {
+  return host.isConnected && host.clientWidth > 0 && host.clientHeight > 0
+}
+
 function appendChatChunk(
   messages: AgentChatMessage[],
   role: AgentChatMessage['role'],
@@ -583,6 +1005,32 @@ function addUserChatMessage(messages: AgentChatMessage[], content: string): Agen
   }
 
   return [...messages, { id: uuid(), role: 'user', content: trimmed }]
+}
+
+function archivedKindLabel(tab: ArchivedTab): string {
+  if (tab.type === 'browser') {
+    return 'Browser'
+  }
+  if (!tab.agent) {
+    return 'Shell'
+  }
+  return tab.agent.name
+}
+
+function archivedRestoreCopy(tab: ArchivedTab): string {
+  if (tab.type === 'browser') {
+    return 'Saved page tab.'
+  }
+  if (!tab.agent) {
+    return 'Persistent shell session.'
+  }
+  if (tab.archivedSessionId) {
+    return 'Reconnect live session, or resume the provider session.'
+  }
+  if (tab.agentRun?.externalSessionId) {
+    return 'Resume the same provider session.'
+  }
+  return 'Continue the latest provider session.'
 }
 
 interface BrowserPaneProps {
@@ -792,10 +1240,16 @@ function AgentIcon({ id }: { id: string }): React.JSX.Element {
 
 interface TerminalHostProps {
   tabId: string
+  title: string
   workspacePath: string
   visible: boolean
   restartNonce?: number
+  autoStart?: boolean
+  initialSnapshot?: string
   agent?: AvailableAgent
+  agentRunSnapshot?: AgentRun
+  launchCommand?: string
+  resumeAgent?: boolean
   onSessionChange?: (sessionId: string | null) => void
   onRuntimeStateChange?: (state: TerminalLifecycleState, exitCode?: number) => void
   onTitleChange?: (title: string) => void
@@ -805,10 +1259,16 @@ interface TerminalHostProps {
 
 function TerminalHost({
   tabId,
+  title,
   workspacePath,
   visible,
   restartNonce,
+  autoStart = true,
+  initialSnapshot,
   agent,
+  agentRunSnapshot,
+  launchCommand,
+  resumeAgent = false,
   onSessionChange,
   onRuntimeStateChange,
   onTitleChange,
@@ -822,6 +1282,8 @@ function TerminalHost({
   const didStartAgentRef = useRef(false)
   const colorDebugLoggedRef = useRef(false)
   const wheelRemainderRef = useRef(0)
+  const titleRef = useRef(title)
+  const agentRunSnapshotRef = useRef(agentRunSnapshot)
   const onSessionChangeRef = useRef(onSessionChange)
   const onRuntimeStateChangeRef = useRef(onRuntimeStateChange)
   const onTitleChangeRef = useRef(onTitleChange)
@@ -829,9 +1291,25 @@ function TerminalHost({
   const onInputDataRef = useRef(onInputData)
 
   const focusTerminal = useCallback((): void => {
-    // Defer focus slightly so it wins over the launcher button/tab that was just clicked.
-    window.requestAnimationFrame(() => {
+    const host = hostRef.current
+    if (host) {
+      host.focus({ preventScroll: true })
+    }
+
+    const focusNow = (): void => {
       xtermRef.current?.focus()
+    }
+
+    // Defer focus so it wins over launcher/drawer button teardown, then retry
+    // after nearby UI transitions settle to keep the hidden xterm textarea
+    // focused for immediate typing.
+    window.requestAnimationFrame(() => {
+      focusNow()
+      for (const delay of [40, 220]) {
+        window.setTimeout(() => {
+          focusNow()
+        }, delay)
+      }
     })
   }, [])
 
@@ -854,6 +1332,23 @@ function TerminalHost({
   useEffect(() => {
     onInputDataRef.current = onInputData
   }, [onInputData])
+
+  useEffect(() => {
+    titleRef.current = title
+  }, [title])
+
+  useEffect(() => {
+    agentRunSnapshotRef.current = agentRunSnapshot
+  }, [agentRunSnapshot])
+
+  useEffect(() => {
+    const session = sessionRef.current
+    if (!session || !title.trim()) {
+      return
+    }
+
+    void window.api.updateTerminalSessionMetadata(session.sessionId, { title })
+  }, [title])
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -881,6 +1376,29 @@ function TerminalHost({
     fitRef.current = fit
     term.loadAddon(fit)
     term.loadAddon(new WebLinksAddon())
+    term.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type === 'keydown' &&
+        agent?.command &&
+        event.key === 'Enter' &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey
+      ) {
+        const session = sessionRef.current
+        if (!session) {
+          return false
+        }
+
+        event.preventDefault()
+        event.stopPropagation()
+        void window.api.writeTerminal(session.sessionId, SHIFT_ENTER_SEQUENCE)
+        return false
+      }
+
+      return true
+    })
     const oscDisposables = [
       term.parser.registerOscHandler(4, (data) => {
         const session = sessionRef.current
@@ -988,16 +1506,30 @@ function TerminalHost({
       focusTerminal()
     }
     host.addEventListener('pointerdown', handlePointerDown)
+    host.addEventListener('mousedown', handlePointerDown)
+    host.addEventListener('click', handlePointerDown)
 
-    const ro = new ResizeObserver(() => {
+    const syncTerminalSize = (): void => {
+      if (!canMeasureTerminalHost(host)) {
+        return
+      }
+
       fit.fit()
       const s = sessionRef.current
-      if (s) window.api.resizeTerminal(s.sessionId, term.cols, term.rows)
+      if (s && term.cols > 0 && term.rows > 0) {
+        window.api.resizeTerminal(s.sessionId, term.cols, term.rows)
+      }
+    }
+
+    const ro = new ResizeObserver(() => {
+      syncTerminalSize()
     })
     ro.observe(host)
 
     const offData = window.api.onTerminalData((ev) => {
-      if (ev.sessionId === sessionRef.current?.sessionId) {
+      const matchesCurrentSession = ev.sessionId === sessionRef.current?.sessionId
+      const matchesPendingTab = !sessionRef.current && ev.sessionKey === tabId
+      if (matchesCurrentSession || matchesPendingTab) {
         term.write(ev.data, () => {
           if (colorDebugLoggedRef.current) {
             return
@@ -1055,13 +1587,53 @@ function TerminalHost({
       onTitleChangeRef.current?.(title)
     })
 
+    const themeObserver = new MutationObserver(() => {
+      term.options.fontFamily = `${cssVar('--font-mono', "'Fira Code', monospace")}, 'SF Mono', Menlo, monospace`
+      term.options.theme = terminalTheme()
+    })
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class']
+    })
+
+    if (!autoStart) {
+      if (initialSnapshot) {
+        term.write(initialSnapshot)
+      }
+      fit.fit()
+      return () => {
+        cancelled = true
+        themeObserver.disconnect()
+        ro.disconnect()
+        offData()
+        offExit()
+        offState()
+        inputOff.dispose()
+        resizeOff.dispose()
+        titleOff.dispose()
+        host.removeEventListener('pointerdown', handlePointerDown)
+        host.removeEventListener('mousedown', handlePointerDown)
+        host.removeEventListener('click', handlePointerDown)
+        onSessionChangeRef.current?.(null)
+        sessionRef.current = null
+        fitRef.current = null
+        xtermRef.current = null
+        colorDebugLoggedRef.current = false
+        wheelRemainderRef.current = 0
+        for (const disposable of oscDisposables) {
+          disposable.dispose()
+        }
+        term.dispose()
+      }
+    }
+
     void window.api
       .createTerminal({
         cwd: workspacePath,
         themeHint: isDarkMode() ? 'dark' : 'light',
         sessionKey: tabId,
         persistentId: agent ? undefined : tabId,
-        initialCommand: agent?.command
+        initialCommand: launchCommand ?? agent?.command
       })
       .then((session) => {
         if (cancelled) {
@@ -1069,20 +1641,43 @@ function TerminalHost({
           return
         }
         sessionRef.current = session
+        if (session.snapshot) {
+          term.write(session.snapshot)
+        }
         onSessionChangeRef.current?.(session.sessionId)
         onRuntimeStateChangeRef.current?.(session.state, session.exitCode)
-        fit.fit()
-        window.api.resizeTerminal(session.sessionId, term.cols, term.rows)
+        void window.api.updateTerminalSessionMetadata(session.sessionId, { title: titleRef.current })
+        syncTerminalSize()
         focusTerminal()
         if (agent?.command && !didStartAgentRef.current) {
           didStartAgentRef.current = true
-          void window.api
-            .startAgent({
-              sessionId: session.sessionId,
-              workspacePath,
-              command: agent.command,
-              displayName: agent.name
-            })
+          const shouldRestoreAgentRun = Boolean(resumeAgent || session.restored)
+          const currentAgentRunSnapshot = agentRunSnapshotRef.current
+          const nextAgentCommand = launchCommand ?? agent.command
+          const syncAgentRun = shouldRestoreAgentRun
+            ? window.api.restoreAgent({
+                sessionId: session.sessionId,
+                workspacePath,
+                command: nextAgentCommand,
+                displayName: agent.name,
+                externalSessionId: currentAgentRunSnapshot?.externalSessionId,
+                suggestedTitle: titleRef.current,
+                status: currentAgentRunSnapshot?.status ?? 'running',
+                startedAt: currentAgentRunSnapshot?.startedAt,
+                finishedAt: currentAgentRunSnapshot?.finishedAt,
+                exitCode: currentAgentRunSnapshot?.exitCode,
+                signal: currentAgentRunSnapshot?.signal,
+                message: currentAgentRunSnapshot?.message
+              })
+            : window.api.startAgent({
+                sessionId: session.sessionId,
+                workspacePath,
+                command: nextAgentCommand,
+                displayName: agent.name,
+                suggestedTitle: titleRef.current
+              })
+
+          void syncAgentRun
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Agent failed to start'
               term.writeln(`\r\n[agent error] ${msg}`)
@@ -1099,15 +1694,6 @@ function TerminalHost({
         }
       })
 
-    const themeObserver = new MutationObserver(() => {
-      term.options.fontFamily = `${cssVar('--font-mono', "'Fira Code', monospace")}, 'SF Mono', Menlo, monospace`
-      term.options.theme = terminalTheme()
-    })
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class']
-    })
-
     return () => {
       cancelled = true
       themeObserver.disconnect()
@@ -1119,6 +1705,8 @@ function TerminalHost({
       resizeOff.dispose()
       titleOff.dispose()
       host.removeEventListener('pointerdown', handlePointerDown)
+      host.removeEventListener('mousedown', handlePointerDown)
+      host.removeEventListener('click', handlePointerDown)
       const s = sessionRef.current
       if (s) window.api.detachTerminal(s.sessionId)
       onSessionChangeRef.current?.(null)
@@ -1132,17 +1720,35 @@ function TerminalHost({
       }
       term.dispose()
     }
-  }, [agent?.command, agent?.name, restartNonce, tabId, workspacePath])
+  }, [
+    agent?.command,
+    agent?.name,
+    autoStart,
+    initialSnapshot,
+    launchCommand,
+    restartNonce,
+    resumeAgent,
+    tabId,
+    workspacePath
+  ])
 
   useEffect(() => {
     if (visible) {
-      fitRef.current?.fit()
+      const host = hostRef.current
+      if (host && canMeasureTerminalHost(host)) {
+        fitRef.current?.fit()
+      }
       focusTerminal()
     }
   }, [focusTerminal, visible])
 
   return (
-    <div ref={hostRef} className="terminal-host" style={{ display: visible ? 'flex' : 'none' }} />
+    <div
+      ref={hostRef}
+      className="terminal-host"
+      tabIndex={-1}
+      style={{ display: visible ? 'flex' : 'none' }}
+    />
   )
 }
 
@@ -1152,16 +1758,30 @@ export function TerminalPanel({
   onActiveTerminalTabChange,
   requestedActiveTab
 }: TerminalPanelProps): React.JSX.Element {
-  const [tabs, setTabs] = useState<PanelTab[]>(() => loadTerminalLayout().tabs)
-  const [activeTabIds, setActiveTabIds] = useState<Record<string, string | null>>(
-    () => loadTerminalLayout().activeTabIds
+  const initialLegacyLayoutRef = useRef<{ tabs: PanelTab[]; activeTabIds: Record<string, string | null> } | null>(
+    null
   )
+  if (initialLegacyLayoutRef.current === null) {
+    initialLegacyLayoutRef.current = loadLegacyTerminalLayout()
+  }
+
+  const [tabs, setTabs] = useState<PanelTab[]>(() => initialLegacyLayoutRef.current?.tabs ?? [])
+  const [activeTabIds, setActiveTabIds] = useState<Record<string, string | null>>(
+    () => initialLegacyLayoutRef.current?.activeTabIds ?? {}
+  )
+  const [persistentShellSupport, setPersistentShellSupport] = useState<PersistentShellSupport | null>(null)
+  const [layoutHydrated, setLayoutHydrated] = useState(false)
+  const [archivedTabs, setArchivedTabs] = useState<ArchivedTab[]>([])
+  const [archiveDrawerOpen, setArchiveDrawerOpen] = useState(false)
+  const [showAllArchived, setShowAllArchived] = useState(false)
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [launchingAgent, setLaunchingAgent] = useState<AvailableAgent | null>(null)
   const [agentTaskDraft, setAgentTaskDraft] = useState('')
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([])
-  const initializedWorkspacesRef = useRef(new Set(tabs.map((tab) => tab.workspacePath)))
+  const initializedWorkspacesRef = useRef(
+    new Set((initialLegacyLayoutRef.current?.tabs ?? []).map((tab) => tab.workspacePath))
+  )
   const renameInputRef = useRef<HTMLInputElement | null>(null)
   const agentTaskInputRef = useRef<HTMLInputElement | null>(null)
   const terminalInputBuffersRef = useRef<Record<string, string>>({})
@@ -1172,10 +1792,111 @@ export function TerminalPanel({
     () => (workspacePath ? tabs.filter((tab) => tab.workspacePath === workspacePath) : []),
     [tabs, workspacePath]
   )
+  const currentWorkspaceDisplayTitles = useMemo(
+    () => makeDisplayTitleMap(currentWorkspaceTabs),
+    [currentWorkspaceTabs]
+  )
+  const currentWorkspaceArchivedTabs = useMemo(
+    () => (workspacePath ? archivedTabs.filter((tab) => tab.workspacePath === workspacePath) : []),
+    [archivedTabs, workspacePath]
+  )
+  const visibleArchivedTabs = useMemo(
+    () => (showAllArchived ? archivedTabs : currentWorkspaceArchivedTabs),
+    [archivedTabs, currentWorkspaceArchivedTabs, showAllArchived]
+  )
+  const persistentShellBlocked =
+    persistentShellSupport?.required === true && !persistentShellSupport.available
+  const persistentShellMessage = persistentShellSupport?.reason ?? 'Persistent shell sessions require tmux.'
+  const persistentShellInstallHint = persistentShellSupport?.installHint
   const activeId =
     workspacePath ? (activeTabIds[workspacePath] ?? currentWorkspaceTabs[0]?.id ?? null) : null
   const firstTerminalWorkspace =
     currentWorkspaceTabs.find((tab) => tab.type === 'terminal')?.workspacePath ?? ''
+
+  useEffect(() => {
+    let cancelled = false
+    const legacyLayout = initialLegacyLayoutRef.current ?? { tabs: [], activeTabIds: {} }
+
+    void Promise.all([
+      window.api.getPersistedTerminalLayout(),
+      window.api.getArchivedTabs().catch(() => []),
+      window.api.listTerminalSessions().catch(() => []),
+      window.api.getPersistentShellSupport().catch(() => null)
+    ])
+      .then(([persistedLayout, archivedTabRecords, daemonSessions, shellSupport]) => {
+        if (cancelled) {
+          return
+        }
+
+        setPersistentShellSupport(shellSupport)
+        const nextArchivedTabs = deserializeArchivedTabs(archivedTabRecords)
+        setArchivedTabs(nextArchivedTabs)
+
+        const hasPersistedLayout =
+          persistedLayout.tabs.length > 0 || Object.keys(persistedLayout.activeTabIds).length > 0
+        const hasLegacyLayout =
+          legacyLayout.tabs.length > 0 || Object.keys(legacyLayout.activeTabIds).length > 0
+        const baseLayout = hasPersistedLayout
+          ? deserializePersistedLayout(persistedLayout)
+          : legacyLayout
+        const mergedLayout = mergeLayoutWithDaemonSessions(
+          baseLayout,
+          daemonSessions,
+          new Set(nextArchivedTabs.map((tab) => tab.id))
+        )
+        const nextLayout =
+          shellSupport && shellSupport.required && !shellSupport.available
+            ? {
+                ...mergedLayout,
+                tabs: mergedLayout.tabs.map((tab) =>
+                  tab.type === 'terminal' && !tab.agent
+                    ? {
+                        ...tab,
+                        sessionId: undefined,
+                        runtimeState: 'destroyed' as const,
+                        restoreState: 'failed' as const,
+                        autoStart: false,
+                        restoredSnapshot: undefined
+                      }
+                    : tab
+                )
+              }
+            : mergedLayout
+
+        initializedWorkspacesRef.current = new Set([
+          ...nextLayout.tabs.map((tab) => tab.workspacePath),
+          ...nextArchivedTabs.map((tab) => tab.workspacePath)
+        ])
+        setTabs(nextLayout.tabs)
+        setActiveTabIds(nextLayout.activeTabIds)
+        setLayoutHydrated(true)
+
+        if (!hasPersistedLayout && hasLegacyLayout) {
+          void window.api
+            .savePersistedTerminalLayout(
+              serializePersistedLayout(legacyLayout.tabs, legacyLayout.activeTabIds)
+            )
+            .then(() => {
+              clearLegacyTerminalLayout()
+            })
+            .catch(() => {
+              /* ignore migration failures */
+            })
+        } else if (hasPersistedLayout) {
+          clearLegacyTerminalLayout()
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPersistentShellSupport(null)
+          setLayoutHydrated(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const terminalStatus = useCallback((tab: TerminalTab): TerminalVisualStatus | undefined => {
     if (tab.runtimeState === 'exited' || tab.runtimeState === 'destroyed') {
@@ -1286,7 +2007,11 @@ export function TerminalPanel({
   }, [appendCommittedUserInput])
 
   useEffect(() => {
-    if (!workspacePath || initializedWorkspacesRef.current.has(workspacePath)) {
+    if (!layoutHydrated || !workspacePath || initializedWorkspacesRef.current.has(workspacePath)) {
+      return
+    }
+
+    if (persistentShellBlocked) {
       return
     }
 
@@ -1297,7 +2022,7 @@ export function TerminalPanel({
       { id, type: 'terminal', workspacePath, title: leaf(workspacePath), agentViewMode: 'terminal', chatMessages: [] }
     ])
     setActiveTabIds((prev) => ({ ...prev, [workspacePath]: id }))
-  }, [workspacePath])
+  }, [layoutHydrated, persistentShellBlocked, workspacePath])
 
   useEffect(() => {
     if (!workspacePath || currentWorkspaceTabs.length === 0) {
@@ -1310,8 +2035,27 @@ export function TerminalPanel({
   }, [activeId, currentWorkspaceTabs, workspacePath])
 
   useEffect(() => {
-    saveTerminalLayout(tabs, activeTabIds)
-  }, [activeTabIds, tabs])
+    if (!layoutHydrated) {
+      return
+    }
+
+    void window.api.savePersistedTerminalLayout(serializePersistedLayout(tabs, activeTabIds))
+  }, [activeTabIds, layoutHydrated, tabs])
+
+  useEffect(() => {
+    if (!layoutHydrated) {
+      return
+    }
+
+    void window.api.saveArchivedTabs(serializeArchivedTabs(archivedTabs))
+  }, [archivedTabs, layoutHydrated])
+
+  useEffect(() => {
+    if (archivedTabs.length === 0) {
+      setArchiveDrawerOpen(false)
+      setShowAllArchived(false)
+    }
+  }, [archivedTabs.length])
 
   useEffect(() => {
     if (!requestedActiveTab) {
@@ -1369,6 +2113,7 @@ export function TerminalPanel({
           workspacePath: tab.workspacePath,
           title: tab.title,
           status: tab.agent ? (tab.agentRun?.status ?? tab.lastKnownStatus) : undefined,
+          message: tab.agent ? tab.agentRun?.message : undefined,
           isAgent: Boolean(tab.agent),
           agentId: tab.agent?.id,
           sessionId: tab.sessionId,
@@ -1397,6 +2142,7 @@ export function TerminalPanel({
             workspacePath: activeTab.workspacePath,
             title: activeTab.title,
             status: activeTab.agent ? (activeTab.agentRun?.status ?? activeTab.lastKnownStatus) : undefined,
+            message: activeTab.agent ? activeTab.agentRun?.message : undefined,
             isAgent: Boolean(activeTab.agent),
             agentId: activeTab.agent?.id,
             sessionId: activeTab.sessionId,
@@ -1450,17 +2196,27 @@ export function TerminalPanel({
       return
     }
 
+    let sessionIdToUpdate: string | undefined
     setTabs((prev) =>
-      prev.map((tab) =>
-        tab.id === tabId
-          ? {
-              ...tab,
-              title: nextTitle,
-              customTitle: true
-            }
-          : tab
-      )
+      prev.map((tab) => {
+        if (tab.id !== tabId) {
+          return tab
+        }
+
+        if (tab.type === 'terminal') {
+          sessionIdToUpdate = tab.sessionId
+        }
+
+        return {
+          ...tab,
+          title: nextTitle,
+          customTitle: true
+        }
+      })
     )
+    if (sessionIdToUpdate) {
+      void window.api.updateTerminalSessionMetadata(sessionIdToUpdate, { title: nextTitle })
+    }
     cancelRenameTab()
   }, [cancelRenameTab, renameDraft])
 
@@ -1482,6 +2238,7 @@ export function TerminalPanel({
   }, [])
 
   const addTab = useCallback(() => {
+    if (persistentShellBlocked) return
     const cwd = workspacePath ?? firstTerminalWorkspace
     if (!cwd) return
     const id = uuid()
@@ -1499,7 +2256,7 @@ export function TerminalPanel({
       }
     ])
     setActiveTabIds((prev) => ({ ...prev, [cwd]: id }))
-  }, [firstTerminalWorkspace, workspacePath])
+  }, [firstTerminalWorkspace, persistentShellBlocked, workspacePath])
 
   const addBrowserTab = useCallback(() => {
     if (!workspacePath) return
@@ -1573,25 +2330,48 @@ export function TerminalPanel({
 
   const closeTab = useCallback(
     (id: string): void => {
+      const closing = tabs.find((tab) => tab.id === id)
+      if (!closing) {
+        return
+      }
+
       delete terminalInputBuffersRef.current[id]
       delete terminalEchoSuppressionsRef.current[id]
+
+      const archivedAt = new Date().toISOString()
+      const archivedTab: ArchivedTab =
+        closing.type === 'terminal'
+          ? {
+              id: closing.id,
+              type: 'terminal',
+              workspacePath: closing.workspacePath,
+              title: closing.title,
+              customTitle: closing.customTitle,
+              agent: closing.agent,
+              agentRun: closing.agentRun,
+              agentViewMode: closing.agent ? closing.agentViewMode : undefined,
+              lastKnownStatus: closing.agent ? (closing.agentRun?.status ?? closing.lastKnownStatus) : closing.lastKnownStatus,
+              archivedAt,
+              archivedSessionId: closing.sessionId
+            }
+          : {
+              id: closing.id,
+              type: 'browser',
+              workspacePath: closing.workspacePath,
+              title: closing.title,
+              url: closing.url,
+              draftUrl: closing.draftUrl,
+              customTitle: closing.customTitle,
+              archivedAt
+            }
+
+      setArchivedTabs((prev) => [archivedTab, ...prev.filter((tab) => tab.id !== archivedTab.id)])
+      setArchiveDrawerOpen(true)
       setTabs((prev) => {
-        const closing = prev.find((t) => t.id === id)
-        if (!closing) {
-          return prev
-        }
-
-        if (closing.type === 'terminal') {
-          if (closing.sessionId) {
-            window.api.destroyTerminal(closing.sessionId)
-          }
-          window.api.destroyPersistentTerminal(closing.id)
-        }
-
-        const next = prev.filter((t) => t.id !== id)
-        const prevWorkspaceTabs = prev.filter((t) => t.workspacePath === closing.workspacePath)
-        const nextWorkspaceTabs = next.filter((t) => t.workspacePath === closing.workspacePath)
-        const idx = prevWorkspaceTabs.findIndex((t) => t.id === id)
+        const next = prev.filter((tab) => tab.id !== id)
+        const prevWorkspaceTabs = prev.filter((tab) => tab.workspacePath === closing.workspacePath)
+        const nextWorkspaceTabs = next.filter((tab) => tab.workspacePath === closing.workspacePath)
+        const idx = prevWorkspaceTabs.findIndex((tab) => tab.id === id)
         const fallbackActive =
           nextWorkspaceTabs[Math.max(0, idx - 1)]?.id ?? nextWorkspaceTabs[0]?.id ?? null
 
@@ -1602,8 +2382,88 @@ export function TerminalPanel({
         )
         return next
       })
+
+      if (closing.type === 'terminal' && !closing.agent && closing.sessionId) {
+        window.api.destroyTerminal(closing.sessionId)
+      }
     },
-    []
+    [tabs]
+  )
+
+  const restoreArchivedTab = useCallback(
+    (id: string): void => {
+      const archived = archivedTabs.find((tab) => tab.id === id)
+      if (!archived) {
+        return
+      }
+
+      delete terminalInputBuffersRef.current[id]
+      delete terminalEchoSuppressionsRef.current[id]
+
+      const restoredTab: PanelTab =
+        archived.type === 'terminal'
+          ? {
+              id: archived.id,
+              type: 'terminal',
+              workspacePath: archived.workspacePath,
+              title: archived.title,
+              customTitle: archived.customTitle,
+              agent: archived.agent,
+              agentRun: archived.agentRun,
+              agentViewMode: archived.agent ? (archived.agentViewMode ?? 'terminal') : 'terminal',
+              chatMessages: [],
+              lastKnownStatus: archived.agentRun?.status ?? archived.lastKnownStatus,
+              launchCommand: archived.agent ? buildAgentResumeCommand(archived.agent, archived.agentRun) : undefined,
+              resumeAgent: Boolean(archived.agent),
+              autoStart: archived.agent ? true : !persistentShellBlocked,
+              runtimeState:
+                !archived.agent && persistentShellBlocked ? 'destroyed' : undefined,
+              restoreState:
+                !archived.agent && persistentShellBlocked ? 'failed' : undefined,
+              restartNonce: 0
+            }
+          : {
+              id: archived.id,
+              type: 'browser',
+              workspacePath: archived.workspacePath,
+              title: archived.title,
+              url: archived.url,
+              draftUrl: archived.draftUrl,
+              customTitle: archived.customTitle
+            }
+
+      setArchivedTabs((prev) => prev.filter((tab) => tab.id !== id))
+      setTabs((prev) => {
+        const withoutExisting = prev.filter((tab) => tab.id !== id)
+        return [...withoutExisting, restoredTab]
+      })
+      setActiveTabIds((prev) => ({ ...prev, [archived.workspacePath]: archived.id }))
+      setArchiveDrawerOpen(false)
+    },
+    [archivedTabs, persistentShellBlocked]
+  )
+
+  const deleteArchivedTab = useCallback(
+    (id: string): void => {
+      const archived = archivedTabs.find((tab) => tab.id === id)
+      if (!archived) {
+        return
+      }
+
+      if (archived.type === 'terminal') {
+        if (archived.archivedSessionId) {
+          window.api.destroyTerminal(archived.archivedSessionId)
+        }
+        if (!archived.agent) {
+          window.api.destroyPersistentTerminal(archived.id)
+        }
+      }
+
+      delete terminalInputBuffersRef.current[id]
+      delete terminalEchoSuppressionsRef.current[id]
+      setArchivedTabs((prev) => prev.filter((tab) => tab.id !== id))
+    },
+    [archivedTabs]
   )
 
   const restartTerminal = useCallback((id: string): void => {
@@ -1615,17 +2475,30 @@ export function TerminalPanel({
           ? {
               ...tab,
               sessionId: undefined,
-              runtimeState: undefined,
+              runtimeState: !tab.agent && persistentShellBlocked ? 'destroyed' : undefined,
               lastExitCode: undefined,
-              agentRun: undefined,
+              agentRun:
+                tab.agent && tab.resumeAgent && tab.agentRun
+                  ? {
+                      ...tab.agentRun,
+                      status: 'running',
+                      finishedAt: undefined,
+                      exitCode: undefined,
+                      signal: undefined,
+                      message: 'Restoring agent session.'
+                    }
+                  : undefined,
               chatMessages: tab.agent ? [] : tab.chatMessages,
               lastKnownStatus: tab.agent ? 'running' : tab.lastKnownStatus,
-              restartNonce: (tab.restartNonce ?? 0) + 1
+              restartNonce: (tab.restartNonce ?? 0) + 1,
+              restoreState: !tab.agent && persistentShellBlocked ? 'failed' : undefined,
+              autoStart: tab.agent ? true : !persistentShellBlocked,
+              restoredSnapshot: undefined
             }
           : tab
       )
     )
-  }, [])
+  }, [persistentShellBlocked])
 
   useEffect(() => {
     let cancelled = false
@@ -1690,6 +2563,13 @@ export function TerminalPanel({
 
   return (
     <div className="terminal-wrapper">
+      {persistentShellBlocked && (
+        <div className="terminal-support-banner" role="status" aria-live="polite">
+          <span>{persistentShellMessage}</span>
+          {persistentShellInstallHint && <code>{persistentShellInstallHint}</code>}
+        </div>
+      )}
+
       <div className="terminal-tabs">
         <div className="terminal-tab-list" role="tablist" aria-label="Terminal tabs">
           {currentWorkspaceTabs.map((tab) => (
@@ -1735,19 +2615,20 @@ export function TerminalPanel({
                   }}
                   title="Right click to rename"
                 >
-                  {tab.title}
+                  {currentWorkspaceDisplayTitles.get(tab.id) ?? tab.title}
                 </button>
               )}
               <button
                 type="button"
                 className="terminal-tab-close"
-                aria-label="Close tab"
+                aria-label="Archive tab"
+                title="Archive tab"
                 onClick={(e) => {
                   e.stopPropagation()
                   closeTab(tab.id)
                 }}
               >
-                ×
+                -
               </button>
             </div>
           ))}
@@ -1758,7 +2639,8 @@ export function TerminalPanel({
             className="terminal-tab-add"
             aria-label="New terminal"
             onClick={addTab}
-            disabled={!workspacePath}
+            disabled={!workspacePath || persistentShellBlocked}
+            title={persistentShellBlocked ? persistentShellMessage : 'New terminal'}
           >
             +
           </button>
@@ -1772,7 +2654,110 @@ export function TerminalPanel({
           >
             Web
           </button>
+          <button
+            type="button"
+            className={`terminal-tab-add terminal-tab-archive-toggle${archiveDrawerOpen ? ' is-active' : ''}`}
+            aria-label={archiveDrawerOpen ? 'Hide archived tabs' : 'Show archived tabs'}
+            aria-expanded={archiveDrawerOpen}
+            aria-controls="terminal-archive-panel"
+            onClick={() => setArchiveDrawerOpen((open) => !open)}
+            title={archiveDrawerOpen ? 'Hide archived tabs' : 'Show archived tabs'}
+          >
+            <span className={`terminal-tab-chevron${archiveDrawerOpen ? ' is-open' : ''}`} aria-hidden="true">
+              ▾
+            </span>
+            <span className="terminal-tab-archive-copy">
+              <span className="terminal-tab-archive-label">Archived</span>
+              <span className="terminal-tab-archive-state">{archiveDrawerOpen ? 'Hide' : 'Show'}</span>
+            </span>
+            {archivedTabs.length > 0 && <span className="terminal-tab-count">{archivedTabs.length}</span>}
+          </button>
         </div>
+      </div>
+
+      <div
+        id="terminal-archive-panel"
+        className={`terminal-archive-panel${archiveDrawerOpen ? ' is-open' : ''}`}
+        aria-hidden={!archiveDrawerOpen}
+      >
+        <div className="terminal-archive-header">
+          <div className="terminal-archive-heading">
+            <div className="terminal-archive-title">Archived tabs</div>
+            <div className="terminal-archive-copy">
+              Close a tab, keep the context. Agent tabs reconnect to the live terminal when possible,
+              then fall back to each provider's native resume flow.
+            </div>
+          </div>
+          <div className="terminal-archive-header-actions">
+            <button
+              type="button"
+              className={`terminal-archive-scope${showAllArchived ? ' is-active' : ''}`}
+              onClick={() => setShowAllArchived((current) => !current)}
+            >
+              {showAllArchived ? 'Current workspace' : 'All workspaces'}
+            </button>
+          </div>
+        </div>
+
+        {visibleArchivedTabs.length > 0 ? (
+          <div className="terminal-archive-list" role="list" aria-label="Archived tabs">
+            {visibleArchivedTabs.map((tab) => {
+              const archiveStatus =
+                tab.type === 'terminal' && tab.agent ? (tab.agentRun?.status ?? tab.lastKnownStatus) : undefined
+              const workspaceLabel = leaf(tab.workspacePath)
+              const showWorkspaceChip =
+                showAllArchived || workspaceLabel.trim().toLowerCase() !== tab.title.trim().toLowerCase()
+
+              return (
+                <div key={tab.id} className="terminal-archive-card" role="listitem">
+                  <div className="terminal-archive-card-main">
+                    <div className="terminal-archive-card-title-row">
+                      {tab.type === 'terminal' && tab.agent ? <AgentIcon id={tab.agent.id} /> : null}
+                      <div className="terminal-archive-card-title-group">
+                        <div className="terminal-archive-card-title">{tab.title}</div>
+                        <div className="terminal-archive-card-meta">
+                          <span className="terminal-archive-chip">{archivedKindLabel(tab)}</span>
+                          {archiveStatus ? (
+                            <span className={`terminal-archive-chip is-status-${archiveStatus}`}>
+                              {archiveStatus}
+                            </span>
+                          ) : null}
+                          {showWorkspaceChip ? (
+                            <span className="terminal-archive-chip">{workspaceLabel}</span>
+                          ) : null}
+                          <span className="terminal-archive-time">{relativeTimeFromNow(tab.archivedAt)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="terminal-archive-card-copy">{archivedRestoreCopy(tab)}</div>
+                  </div>
+                  <div className="terminal-archive-card-actions">
+                    <button
+                      type="button"
+                      className="terminal-archive-action is-primary"
+                      onClick={() => restoreArchivedTab(tab.id)}
+                    >
+                      Restore
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-archive-action"
+                      onClick={() => deleteArchivedTab(tab.id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="terminal-archive-empty">
+            {showAllArchived
+              ? 'No archived tabs yet.'
+              : `No archived tabs for ${leaf(workspacePath)}.`}
+          </div>
+        )}
       </div>
 
       {availableAgents.length > 0 && (
@@ -1883,10 +2868,16 @@ export function TerminalPanel({
             >
               <TerminalHost
                 tabId={tab.id}
+                title={tab.title}
                 workspacePath={tab.workspacePath}
                 restartNonce={tab.restartNonce}
                 visible={tab.workspacePath === workspacePath && tab.id === activeId}
+                autoStart={tab.autoStart}
+                initialSnapshot={tab.restoredSnapshot}
                 agent={tab.agent}
+                agentRunSnapshot={tab.agentRun}
+                launchCommand={tab.launchCommand}
+                resumeAgent={tab.resumeAgent}
                 onSessionChange={(sessionId) => bindSession(tab.id, sessionId)}
                 onRuntimeStateChange={(state, exitCode) =>
                   updateTerminalRuntimeState(tab.id, state, exitCode)
@@ -1899,10 +2890,20 @@ export function TerminalPanel({
                 <div className="terminal-exit-overlay">
                   <div className="terminal-exit-card">
                     <div className="terminal-exit-title">
-                      {tab.runtimeState === 'destroyed' ? 'Terminal closed' : 'Terminal exited'}
+                      {tab.restoreState === 'disconnected'
+                        ? 'Session disconnected'
+                        : tab.restoreState === 'failed'
+                          ? 'Session unavailable'
+                          : tab.runtimeState === 'destroyed'
+                            ? 'Terminal closed'
+                            : 'Terminal exited'}
                     </div>
                     <div className="terminal-exit-copy">
-                      {tab.runtimeState === 'destroyed' ? (
+                      {tab.restoreState === 'disconnected' ? (
+                        'Harmony restored this tab from the daemon registry, but the live terminal session no longer exists.'
+                      ) : tab.restoreState === 'failed' ? (
+                        'Harmony restored metadata for this session, but reconnect is not available. Start a new session to continue.'
+                      ) : tab.runtimeState === 'destroyed' ? (
                         'This session was explicitly closed and can be started again.'
                       ) : tab.lastExitCode && tab.lastExitCode !== 0 ? (
                         <>
@@ -1918,6 +2919,8 @@ export function TerminalPanel({
                       <button
                         type="button"
                         className="terminal-exit-restart"
+                        disabled={!tab.agent && persistentShellBlocked}
+                        title={!tab.agent && persistentShellBlocked ? persistentShellMessage : undefined}
                         onClick={() => restartTerminal(tab.id)}
                       >
                         {tab.agent ? 'Restart agent' : 'Restart'}
@@ -1927,7 +2930,7 @@ export function TerminalPanel({
                         className="terminal-exit-dismiss"
                         onClick={() => closeTab(tab.id)}
                       >
-                        Close tab
+                        Archive tab
                       </button>
                     </div>
                   </div>
@@ -1948,10 +2951,25 @@ export function TerminalPanel({
 
       {currentWorkspaceTabs.length === 0 && (
         <div className="terminal-empty">
-          <p>
-            No session attached for <code>{leaf(workspacePath)}</code>. Open a terminal tab to start
-            working in this workspace.
-          </p>
+          {currentWorkspaceArchivedTabs.length > 0 ? (
+            <p>
+              <code>{leaf(workspacePath)}</code> has {currentWorkspaceArchivedTabs.length} archived{' '}
+              {currentWorkspaceArchivedTabs.length === 1 ? 'tab' : 'tabs'}. Open{' '}
+              <strong>Archived</strong> to restore them.
+            </p>
+          ) : persistentShellBlocked ? (
+            <p>
+              Persistent shell sessions are unavailable for <code>{leaf(workspacePath)}</code>. Install{' '}
+              <code>tmux</code>
+              {persistentShellInstallHint ? <> with <code>{persistentShellInstallHint}</code></> : null} to
+              enable shell tabs.
+            </p>
+          ) : (
+            <p>
+              No session attached for <code>{leaf(workspacePath)}</code>. Open a terminal tab to start
+              working in this workspace.
+            </p>
+          )}
         </div>
       )}
 

@@ -11,7 +11,6 @@ import type {
   CodexQuota,
   ContextInfo,
   GitAvailability,
-  SessionStat,
   SkillMarketplaceItem,
   WorkspaceDiffResult,
   WorkspaceChangesSnapshot,
@@ -133,10 +132,6 @@ function fmtInstalls(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
   return String(n)
-}
-
-function isSupportedAgentId(value: string | undefined): value is 'opencode' | 'codex' {
-  return value === 'opencode' || value === 'codex'
 }
 
 function shouldConfirmRisk(risk: string): boolean {
@@ -782,6 +777,32 @@ function mcpStatusLabel(status: import('../../shared/workbench').McpServerSummar
   }
 }
 
+function messageFromInvokeError(error: unknown, fallback: string): string {
+  const rawMessage = error instanceof Error ? error.message : fallback
+  return rawMessage
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .trim() || fallback
+}
+
+function formatCreateWorktreeStatus(error: unknown, branch: string): string {
+  const message = messageFromInvokeError(error, `Couldn't create a worktree for "${branch}".`)
+
+  if (/already open in another worktree/i.test(message)) {
+    return `Branch "${branch}" is already open in another worktree.`
+  }
+
+  if (/folder .* already exists/i.test(message)) {
+    return message
+  }
+
+  if (/not available locally yet/i.test(message)) {
+    return message
+  }
+
+  return `Couldn't create a worktree for "${branch}".`
+}
+
 function AccordItemGlyph({
   iconUrl,
   color
@@ -958,7 +979,6 @@ function App(): React.JSX.Element {
   const [isMarketplaceLoading, setIsMarketplaceLoading] = useState(false)
   const [installingSkillId, setInstallingSkillId] = useState<string | null>(null)
   const [gitAvailability, setGitAvailability] = useState<GitAvailability | null>(null)
-  const [sessionStats, setSessionStats] = useState<SessionStat[]>([])
   const [usageData, setUsageData] = useState<AgentUsage[]>([])
   const [codexQuota, setCodexQuota] = useState<CodexQuota | null>(null)
   const [claudeQuota, setClaudeQuota] = useState<ClaudeQuota | null>(null)
@@ -1081,34 +1101,6 @@ function App(): React.JSX.Element {
       off()
     }
   }, [])
-
-  // Poll opencode session stats every 30 s while a workspace is active
-  useEffect(() => {
-    if (!selectedWt) return
-    let cancelled = false
-
-    const fetchStats = (): void => {
-      void window.api.listSessionStats({
-        workspacePath: selectedWt,
-        activeHint:
-          activeTerminalTab?.externalSessionId && isSupportedAgentId(activeTerminalTab.agentId)
-            ? {
-                agent: activeTerminalTab.agentId,
-                externalSessionId: activeTerminalTab.externalSessionId
-              }
-            : undefined
-      }).then((rows) => {
-        if (!cancelled) setSessionStats(rows)
-      })
-    }
-
-    fetchStats()
-    const timer = window.setInterval(fetchStats, 30_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [activeTerminalTab?.agentId, activeTerminalTab?.externalSessionId, selectedWt])
 
   // Poll usage summary every 60 s
   useEffect(() => {
@@ -1383,6 +1375,14 @@ function App(): React.JSX.Element {
   const handleCreateWorktree = useCallback(
     async (branch: BranchInfo, workspacePath?: string): Promise<void> => {
       try {
+        const existingWorktree = worktrees.find((worktree) => worktree.branch === branch.name)
+        if (existingWorktree) {
+          setHiddenWorktrees((prev) => prev.filter((path) => path !== existingWorktree.path))
+          await loadWorkspace(existingWorktree.path)
+          setStatus(`Branch "${branch.name}" is already open. Switched to ${existingWorktree.name}.`)
+          return
+        }
+
         let path: string | null = workspacePath ?? selectedWt ?? worktrees[0]?.path ?? openedFolders[0] ?? null
         if (!path) {
           path = await openFolderAndRefresh()
@@ -1398,10 +1398,10 @@ function App(): React.JSX.Element {
         await refresh({ preferWt: worktree.path, extraWorkspacePaths: [path] })
         setStatus(`Created ${worktree.name}`)
       } catch (err: unknown) {
-        setStatus(err instanceof Error ? err.message : 'Create failed')
+        setStatus(formatCreateWorktreeStatus(err, branch.name))
       }
     },
-    [openFolderAndRefresh, refresh, selectedWt, worktrees, openedFolders]
+    [loadWorkspace, openFolderAndRefresh, refresh, selectedWt, setHiddenWorktrees, worktrees, openedFolders]
   )
 
   const handleOpenTerminalTab = useCallback(
@@ -1708,26 +1708,6 @@ function App(): React.JSX.Element {
     [contextInfo]
   )
   const subagentsList = contextInfo?.subagents ?? []
-  const activeSessionStat = useMemo(() => {
-    if (!activeTerminalTab?.isAgent) {
-      return null
-    }
-
-    if (!isSupportedAgentId(activeTerminalTab.agentId) || !activeTerminalTab.externalSessionId) {
-      return null
-    }
-
-    return (
-      sessionStats.find(
-        (session) =>
-          session.agent === activeTerminalTab.agentId &&
-          session.id === activeTerminalTab.externalSessionId
-      ) ??
-      sessionStats[0] ??
-      null
-    )
-  }, [activeTerminalTab, sessionStats])
-  const contextWindowCount = activeSessionStat ? 1 : 0
 
   const toggleAccordion = useCallback((id: string): void => {
     setOpenAccordions((prev) => {
@@ -2397,75 +2377,6 @@ function App(): React.JSX.Element {
                   </button>
                 </div>
                 <div className="accord-list">
-                  {/* Context Window — active agent session */}
-                  <AccordionSection
-                    id="context"
-                    label="Context Window"
-                    count={contextWindowCount}
-                    open={openAccordions.has('context')}
-                    onToggle={() => toggleAccordion('context')}
-                  >
-                    {activeTerminalTab && (
-                      <div className="accord-item accord-item-session">
-                        <div className="session-row">
-                          <span className="session-title">Active Session</span>
-                          <span className="session-tokens">{activeTerminalTab.title}</span>
-                        </div>
-                        <div className="session-meta">
-                          <span className="session-agent">{activeTerminalTab.agentId ?? 'terminal'}</span>
-                          <span className="session-model">{activeTerminalTab.status ?? 'active'}</span>
-                        </div>
-                      </div>
-                    )}
-                    {!activeTerminalTab ? (
-                      <div className="empty-state">
-                        Select an active terminal tab to inspect its session context.
-                      </div>
-                    ) : !activeTerminalTab.isAgent ? (
-                      <div className="empty-state">
-                        Context window data is only available for the active AI agent session.
-                      </div>
-                    ) : !activeSessionStat ? (
-                      <div className="empty-state">
-                        No matching session context found for the active agent session yet.
-                      </div>
-                    ) : (
-                      (() => {
-                        const total = activeSessionStat.inputTokens + activeSessionStat.outputTokens
-                        const totalK = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : String(total)
-                        const pct = activeSessionStat.contextWindow
-                          ? Math.min(100, (total / activeSessionStat.contextWindow) * 100)
-                          : null
-                        const ctxK = activeSessionStat.contextWindow
-                          ? `${(activeSessionStat.contextWindow / 1000).toFixed(0)}k`
-                          : null
-                        const barClass = pct === null ? '' : pct >= 80 ? ' is-danger' : pct >= 60 ? ' is-warn' : ' is-ok'
-
-                        return (
-                          <div key={activeSessionStat.id} className="accord-item accord-item-session">
-                            <div className="session-row">
-                              <span className="session-title">{activeSessionStat.title || 'Untitled'}</span>
-                              <span className="session-tokens">{totalK}{ctxK && <span className="session-ctx-max">/{ctxK}</span>}</span>
-                            </div>
-                            {pct !== null && (
-                              <div className="session-bar-wrap" title={`${pct.toFixed(1)}% of context window`}>
-                                <div className={`session-bar${barClass}`} style={{ width: `${pct}%` }} />
-                              </div>
-                            )}
-                            <div className="session-meta">
-                              <span className="session-agent">{activeSessionStat.agent}</span>
-                              <span className="session-model">{activeSessionStat.model || '—'}</span>
-                              <span className="session-breakdown">
-                                ↑{(activeSessionStat.inputTokens / 1000).toFixed(1)}k&nbsp;↓{(activeSessionStat.outputTokens / 1000).toFixed(1)}k
-                                {activeSessionStat.cacheReadTokens > 0 && <>&nbsp;⚡{(activeSessionStat.cacheReadTokens / 1000).toFixed(1)}k</>}
-                              </span>
-                            </div>
-                          </div>
-                        )
-                      })()
-                    )}
-                  </AccordionSection>
-
                   <AccordionSection
                     id="skill-store"
                     label="Skill Store"
