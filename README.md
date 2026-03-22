@@ -4,7 +4,7 @@
 
 ### A desktop workspace for running CLI coding agents across terminals, repos, and worktrees
 
-[Download v0.0.2](https://github.com/jiatastic/harmony/releases/tag/v0.0.2) · [GitHub](https://github.com/jiatastic/harmony)
+[Releases](https://github.com/jiatastic/harmony/releases) · [GitHub](https://github.com/jiatastic/harmony)
 
 </div>
 
@@ -95,11 +95,21 @@ npm run build:mac:unsigned
 Harmony releases are published from Git tags.
 
 ```bash
-git tag v0.0.2
-git push origin v0.0.2
+npm version --workspace @harmony/desktop 0.0.0-alpha0.1 --no-git-tag-version
+git tag v0.0.0-alpha0.1
+git push origin v0.0.0-alpha0.1
 ```
 
-The GitHub release workflow installs dependencies from the monorepo root and builds the desktop app from `apps/desktop`.
+`apps/desktop/package.json` is the release source of truth. The Git tag must match that version with a leading `v`.
+
+Examples:
+
+- `0.0.0-alpha0.1` -> `v0.0.0-alpha0.1`
+- `0.0.1` -> `v0.0.1`
+
+Tags with a prerelease suffix like `-alpha0.1` publish as GitHub prereleases. Stable tags publish as normal releases.
+
+The GitHub release workflow installs dependencies from the monorepo root, validates the tag/version match, and builds the desktop app from `apps/desktop`.
 
 ## Tech Stack
 

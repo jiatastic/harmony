@@ -1,11 +1,19 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
-import electronUpdater from 'electron-updater'
 import type { ProgressInfo, UpdateInfo } from 'builder-util-runtime'
 import { harmonyChannels, type AppUpdateState } from '../shared/workbench'
 
-const { autoUpdater } = electronUpdater
+let autoUpdater: (typeof import('electron-updater'))['autoUpdater'] | null = null
 
 let initialized = false
+
+function inferUpdateChannel(version: string): 'latest' | 'alpha' | 'beta' {
+  const match = version.match(/-([a-z]+)/i)
+  const channel = match?.[1]?.toLowerCase()
+  if (channel === 'alpha' || channel === 'beta') {
+    return channel
+  }
+  return 'latest'
+}
 
 function supportsAutoUpdates(): boolean {
   return app.isPackaged
@@ -87,7 +95,7 @@ function setUpdateError(error: unknown): AppUpdateState {
 }
 
 async function checkForUpdates(): Promise<AppUpdateState> {
-  if (!supportsAutoUpdates()) {
+  if (!supportsAutoUpdates() || !autoUpdater) {
     return updateState
   }
 
@@ -105,7 +113,7 @@ async function checkForUpdates(): Promise<AppUpdateState> {
 }
 
 async function downloadUpdate(): Promise<void> {
-  if (!supportsAutoUpdates()) {
+  if (!supportsAutoUpdates() || !autoUpdater) {
     return
   }
 
@@ -122,7 +130,7 @@ async function downloadUpdate(): Promise<void> {
 }
 
 function installUpdateAndRestart(): void {
-  if (!supportsAutoUpdates() || updateState.phase !== 'downloaded') {
+  if (!supportsAutoUpdates() || !autoUpdater || updateState.phase !== 'downloaded') {
     return
   }
 
@@ -130,6 +138,10 @@ function installUpdateAndRestart(): void {
 }
 
 function bindAutoUpdaterEvents(): void {
+  if (!autoUpdater) {
+    return
+  }
+
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
 
@@ -181,7 +193,7 @@ function bindAutoUpdaterEvents(): void {
   })
 }
 
-export function initializeUpdater(): void {
+export async function initializeUpdater(): Promise<void> {
   if (initialized) {
     return
   }
@@ -192,6 +204,12 @@ export function initializeUpdater(): void {
   if (!supportsAutoUpdates()) {
     return
   }
+
+  const electronUpdater = await import('electron-updater')
+  autoUpdater = electronUpdater.autoUpdater
+  const updateChannel = inferUpdateChannel(app.getVersion())
+  autoUpdater.allowPrerelease = updateChannel !== 'latest'
+  autoUpdater.channel = updateChannel
 
   bindAutoUpdaterEvents()
   window.setTimeout(() => {
