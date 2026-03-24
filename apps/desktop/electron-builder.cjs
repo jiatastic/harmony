@@ -1,0 +1,78 @@
+const { version } = require('./package.json')
+
+function inferReleaseChannel(appVersion) {
+  const prereleaseMatch = appVersion.match(/-([a-z]+)/i)
+  return prereleaseMatch?.[1]?.toLowerCase() ?? 'latest'
+}
+
+const releaseChannel = inferReleaseChannel(version)
+const releaseType =
+  process.env.HARMONY_RELEASE_TYPE || (releaseChannel === 'latest' ? 'release' : 'prerelease')
+
+/** @type {import('electron-builder').Configuration} */
+module.exports = {
+  appId: 'com.jiatastic.harmony',
+  productName: 'Harmony',
+  afterPack: 'scripts/prepare-mac-build.cjs',
+  afterSign: 'scripts/notarize.cjs',
+  extraMetadata: {
+    name: 'harmony'
+  },
+  directories: {
+    buildResources: 'build'
+  },
+  files: [
+    '!**/.vscode/*',
+    '!src/*',
+    '!electron.vite.config.{js,ts,mjs,cjs}',
+    '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}',
+    '!{.env,.env.*,.npmrc,pnpm-lock.yaml}',
+    '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  ],
+  asarUnpack: ['resources/**'],
+  generateUpdatesFilesForAllChannels: true,
+  publish: [
+    {
+      provider: 'github',
+      owner: 'jiatastic',
+      repo: 'harmony',
+      releaseType,
+      channel: releaseChannel
+    }
+  ],
+  win: {
+    executableName: 'Harmony'
+  },
+  nsis: {
+    artifactName: '${productName}-${version}-${arch}-setup.${ext}',
+    shortcutName: '${productName}',
+    uninstallDisplayName: '${productName}',
+    createDesktopShortcut: 'always'
+  },
+  mac: {
+    target: ['dmg', 'zip'],
+    hardenedRuntime: true,
+    gatekeeperAssess: false,
+    entitlements: 'build/entitlements.mac.plist',
+    entitlementsInherit: 'build/entitlements.mac.plist',
+    extendInfo: {
+      NSCameraUsageDescription: "Application requests access to the device's camera.",
+      NSMicrophoneUsageDescription: "Application requests access to the device's microphone.",
+      NSDocumentsFolderUsageDescription: "Application requests access to the user's Documents folder.",
+      NSDownloadsFolderUsageDescription: "Application requests access to the user's Downloads folder."
+    }
+  },
+  dmg: {
+    artifactName: '${productName}-${version}-${arch}.${ext}'
+  },
+  linux: {
+    executableName: 'harmony',
+    target: ['AppImage', 'deb'],
+    maintainer: 'Haoxiang Jia',
+    category: 'Utility'
+  },
+  appImage: {
+    artifactName: '${productName}-${version}-${arch}.${ext}'
+  },
+  npmRebuild: false
+}

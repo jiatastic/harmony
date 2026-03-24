@@ -10,17 +10,40 @@ permissions:
   contents: write
 
 jobs:
+  validate_release:
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Read desktop app version
+        id: version
+        run: |
+          APP_VERSION="$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('apps/desktop/package.json').read_text())['version'])")"
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag matches app version
+        if: github.event_name == 'push'
+        run: |
+          if [ "v${{ steps.version.outputs.app_version }}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match apps/desktop version v${{ steps.version.outputs.app_version }}." >&2
+            exit 1
+          fi
+
   release:
+    needs: validate_release
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            build_command: npm run build && npx electron-builder --mac --config.mac.identity=null --config.mac.hardenedRuntime=false --publish always
+            builder_args: --mac --config electron-builder.cjs --config.mac.identity=null --config.mac.hardenedRuntime=false
           - os: windows-latest
-            build_command: npm run build && npx electron-builder --win --publish always
+            builder_args: --win --config electron-builder.cjs
           - os: ubuntu-latest
-            build_command: npm run build && npx electron-builder --linux --publish always
+            builder_args: --linux --config electron-builder.cjs
 
     runs-on: ${{ matrix.os }}
 
@@ -38,7 +61,8 @@ jobs:
         run: npm ci
 
       - name: Build and publish release artifacts
-        run: ${{ matrix.build_command }}
+        run: npm run build && npx electron-builder ${{ matrix.builder_args }} --publish ${{ github.event_name == 'push' && 'always' || 'never' }}
         working-directory: apps/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HARMONY_RELEASE_TYPE: ${{ contains(needs.validate_release.outputs.app_version, '-') && 'prerelease' || 'release' }}
