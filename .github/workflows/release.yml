@@ -20,7 +20,9 @@ jobs:
 
       - name: Read desktop app version
         id: version
-        run: echo "app_version=$(node -p 'require(\"./apps/desktop/package.json\").version')" >> "$GITHUB_OUTPUT"
+        run: |
+          APP_VERSION="$(python3 -c "import json, pathlib; print(json.loads(pathlib.Path('apps/desktop/package.json').read_text())['version'])")"
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Ensure tag matches app version
         if: github.event_name == 'push'
